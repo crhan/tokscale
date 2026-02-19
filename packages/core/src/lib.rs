@@ -678,7 +678,8 @@ pub async fn finalize_report(options: FinalizeReportOptions) -> napi::Result<Mod
         .messages
         .iter()
         .map(|msg| {
-            let cost = pricing.calculate_cost(
+            let original_cost = msg.cost;
+            let calculated_cost = pricing.calculate_cost(
                 &msg.model_id,
                 msg.input,
                 msg.output,
@@ -686,7 +687,12 @@ pub async fn finalize_report(options: FinalizeReportOptions) -> napi::Result<Mod
                 msg.cache_write,
                 msg.reasoning,
             );
-            parsed_to_unified(msg, cost)
+            let final_cost = if calculated_cost > 0.0 {
+                calculated_cost
+            } else {
+                original_cost
+            };
+            parsed_to_unified(msg, final_cost)
         })
         .collect();
 
@@ -827,7 +833,8 @@ pub async fn finalize_monthly_report(options: FinalizeMonthlyOptions) -> napi::R
         .messages
         .iter()
         .map(|msg| {
-            let cost = pricing.calculate_cost(
+            let original_cost = msg.cost;
+            let calculated_cost = pricing.calculate_cost(
                 &msg.model_id,
                 msg.input,
                 msg.output,
@@ -835,7 +842,12 @@ pub async fn finalize_monthly_report(options: FinalizeMonthlyOptions) -> napi::R
                 msg.cache_write,
                 msg.reasoning,
             );
-            parsed_to_unified(msg, cost)
+            let final_cost = if calculated_cost > 0.0 {
+                calculated_cost
+            } else {
+                original_cost
+            };
+            parsed_to_unified(msg, final_cost)
         })
         .collect();
 
@@ -961,7 +973,8 @@ pub async fn finalize_graph(options: FinalizeGraphOptions) -> napi::Result<Graph
         .messages
         .iter()
         .map(|msg| {
-            let cost = pricing.calculate_cost(
+            let original_cost = msg.cost;
+            let calculated_cost = pricing.calculate_cost(
                 &msg.model_id,
                 msg.input,
                 msg.output,
@@ -969,7 +982,12 @@ pub async fn finalize_graph(options: FinalizeGraphOptions) -> napi::Result<Graph
                 msg.cache_write,
                 msg.reasoning,
             );
-            parsed_to_unified(msg, cost)
+            let final_cost = if calculated_cost > 0.0 {
+                calculated_cost
+            } else {
+                original_cost
+            };
+            parsed_to_unified(msg, final_cost)
         })
         .collect();
 
@@ -1055,7 +1073,8 @@ pub async fn finalize_report_and_graph(options: FinalizeReportOptions) -> napi::
         .messages
         .iter()
         .map(|msg| {
-            let cost = pricing.calculate_cost(
+            let original_cost = msg.cost;
+            let calculated_cost = pricing.calculate_cost(
                 &msg.model_id,
                 msg.input,
                 msg.output,
@@ -1063,7 +1082,12 @@ pub async fn finalize_report_and_graph(options: FinalizeReportOptions) -> napi::
                 msg.cache_write,
                 msg.reasoning,
             );
-            parsed_to_unified(msg, cost)
+            let final_cost = if calculated_cost > 0.0 {
+                calculated_cost
+            } else {
+                original_cost
+            };
+            parsed_to_unified(msg, final_cost)
         })
         .collect();
 
