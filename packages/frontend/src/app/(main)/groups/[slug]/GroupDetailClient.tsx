@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback, memo, useMemo } from "react";
+import { useState, useEffect, useCallback, memo, useMemo, useRef } from "react";
+import Link from "next/link";
 import { useRouter } from "nextjs-toploader/app";
 import styled from "styled-components";
 import { TabBar } from "@/components/TabBar";
@@ -47,6 +48,25 @@ const GroupActions = styled.div`
 `;
 
 const ActionButton = styled.a`
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-default);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all 0.15s;
+
+  &:hover {
+    border-color: #0073ff;
+    color: var(--color-fg-default);
+  }
+`;
+
+const ActionLink = styled(Link)`
   display: inline-flex;
   align-items: center;
   padding: 6px 12px;
@@ -290,7 +310,7 @@ const RoleBadge = styled.span<{ $role: string }>`
       ? `background: rgba(234, 179, 8, 0.15); color: #EAB308;`
       : $role === "admin"
         ? `background: rgba(0, 115, 255, 0.1); color: #0073FF;`
-        : `background: transparent; color: transparent;`}
+        : `display: none;`}
 `;
 
 const TokenValue = styled.span`
@@ -424,6 +444,7 @@ export default function GroupDetailClient({
   const effectiveSortBy = mounted ? leaderboardSortBy : "tokens";
 
   const isAdmin = userRole === "owner" || userRole === "admin";
+  const hasEverFetched = useRef(false);
 
   const fetchLeaderboard = useCallback(
     async (p: Period, sortBy: string) => {
@@ -443,8 +464,11 @@ export default function GroupDetailClient({
   );
 
   useEffect(() => {
-    // Skip initial load since we have SSR data
-    if (period === "all" && effectiveSortBy === "tokens") return;
+    if (!hasEverFetched.current && period === "all" && effectiveSortBy === "tokens") {
+      hasEverFetched.current = true;
+      return;
+    }
+    hasEverFetched.current = true;
     fetchLeaderboard(period, effectiveSortBy);
   }, [period, effectiveSortBy, fetchLeaderboard]);
 
@@ -463,12 +487,8 @@ export default function GroupDetailClient({
           <GroupActions>
             {isAdmin && (
               <>
-                <ActionButton href={`/groups/${group.slug}/members`}>
-                  Members
-                </ActionButton>
-                <ActionButton href={`/groups/${group.slug}/settings`}>
-                  Settings
-                </ActionButton>
+                <ActionLink href={`/groups/${group.slug}/members`}>Members</ActionLink>
+                <ActionLink href={`/groups/${group.slug}/settings`}>Settings</ActionLink>
               </>
             )}
             {userRole && userRole !== "owner" && (

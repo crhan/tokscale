@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "nextjs-toploader/app";
 import styled from "styled-components";
 import { Switch } from "@/components/Switch";
@@ -246,10 +246,15 @@ export default function GroupSettingsClient({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [origin, setOrigin] = useState("");
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
 
   const isOwner = userRole === "owner";
   const inviteUrl = group.inviteCode
-    ? `${typeof window !== "undefined" ? window.location.origin : ""}/groups/join/${group.inviteCode}`
+    ? `${origin}/groups/join/${group.inviteCode}`
     : null;
 
   const handleSave = async (e: React.FormEvent) => {

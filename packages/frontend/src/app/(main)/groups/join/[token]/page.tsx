@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import NextLink from "next/link";
 import { useRouter, useParams } from "next/navigation";
 import styled from "styled-components";
 
@@ -71,7 +72,7 @@ const SuccessMessage = styled.p`
   margin-bottom: 16px;
 `;
 
-const Link = styled.a`
+const StyledLink = styled(NextLink)`
   display: inline-block;
   margin-top: 16px;
   font-size: 14px;
@@ -126,9 +127,9 @@ export default function JoinGroupPage() {
           <SuccessMessage>
             You&apos;ve joined {success.groupName}!
           </SuccessMessage>
-          <Link href={`/groups/${success.groupSlug}`}>
+          <StyledLink href={`/groups/${success.groupSlug}`}>
             Go to group →
-          </Link>
+          </StyledLink>
         </Card>
       </Container>
     );
@@ -148,7 +149,7 @@ export default function JoinGroupPage() {
           {isJoining ? "Joining..." : "Accept Invite"}
         </JoinButton>
 
-        <Link href="/groups">← Back to groups</Link>
+        <StyledLink href="/groups">← Back to groups</StyledLink>
       </Card>
     </Container>
   );

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "nextjs-toploader/app";
 import styled from "styled-components";
 import { TabBar } from "@/components/TabBar";
@@ -34,7 +35,7 @@ const Description = styled.p`
   color: var(--color-fg-muted);
 `;
 
-const CreateButton = styled.a`
+const CreateButton = styled(Link)`
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -181,29 +182,32 @@ export default function GroupsClient({ currentUser }: GroupsClientProps) {
   const [data, setData] = useState<GroupsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchGroups = useCallback(
-    async (activeTab: Tab) => {
-      setIsLoading(true);
-      try {
-        const url =
-          activeTab === "my"
-            ? "/api/groups?my=true&limit=50"
-            : "/api/groups?limit=50";
-        const res = await fetch(url);
-        if (res.ok) {
-          const result = await res.json();
-          setData(result);
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    []
-  );
-
   useEffect(() => {
-    fetchGroups(tab);
-  }, [tab, fetchGroups]);
+    const abortController = new AbortController();
+    setIsLoading(true);
+
+    const url = tab === "my" ? "/api/groups?my=true&limit=50" : "/api/groups?limit=50";
+    fetch(url, { signal: abortController.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((result) => {
+        setData(result);
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError") {
+          setData(null);
+        }
+      })
+      .finally(() => {
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => abortController.abort();
+  }, [tab]);
 
   const tabs = currentUser
     ? [
