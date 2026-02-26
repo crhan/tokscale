@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db, groups, groupMembers } from "@/lib/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import { getSessionFromHeader } from "@/lib/auth/session";
 import { generateUniqueSlug } from "@/lib/groups/slug";
 
@@ -73,6 +73,10 @@ export async function GET(request: Request) {
 
     const session = await getSessionFromHeader(request);
 
+    if (myOnly && !session) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
     if (myOnly && session) {
       const [items, totalResult] = await Promise.all([
         db
@@ -87,7 +91,7 @@ export async function GET(request: Request) {
             createdAt: groups.createdAt,
             updatedAt: groups.updatedAt,
             role: groupMembers.role,
-            memberCount: sql<number>`COUNT(${groupMembers.id}) OVER (PARTITION BY ${groups.id})`.as(
+            memberCount: sql<number>`(SELECT COUNT(*) FROM "group_members" WHERE "group_members"."group_id" = ${groups.id})`.as(
               "member_count"
             ),
           })
@@ -129,7 +133,7 @@ export async function GET(request: Request) {
           createdBy: groups.createdBy,
           createdAt: groups.createdAt,
           updatedAt: groups.updatedAt,
-          memberCount: sql<number>`COUNT(${groupMembers.id})`.as("member_count"),
+          memberCount: sql<number>`CAST(COUNT(${groupMembers.id}) AS integer)`.as("member_count"),
         })
         .from(groups)
         .leftJoin(groupMembers, eq(groupMembers.groupId, groups.id))

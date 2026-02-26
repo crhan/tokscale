@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { db, groups } from "@/lib/db";
 import { eq } from "drizzle-orm";
-import { getSessionFromHeader } from "@/lib/auth/session";
+import { getSession, getSessionFromHeader } from "@/lib/auth/session";
 import { getGroupMembership } from "@/lib/groups/permissions";
 import { getGroupLeaderboardData } from "@/lib/groups/getGroupLeaderboard";
 import type { Period, SortBy } from "@/lib/leaderboard/getLeaderboard";
@@ -30,7 +30,10 @@ export async function GET(
 
     // If private, require membership
     if (!group.isPublic) {
-      const session = await getSessionFromHeader(request);
+      let session = await getSessionFromHeader(request);
+      if (!session) {
+        session = await getSession();
+      }
       if (!session) {
         return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
       }

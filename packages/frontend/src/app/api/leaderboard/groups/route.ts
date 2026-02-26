@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { unstable_cache } from "next/cache";
 import { db, groups, groupMembers, submissions, users } from "@/lib/db";
 import type { Period, SortBy } from "@/lib/leaderboard/getLeaderboard";
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, lte, sql } from "drizzle-orm";
 
 const VALID_PERIODS: Period[] = ["all", "month", "week"];
 const VALID_SORT_BY: SortBy[] = ["tokens", "cost"];
@@ -24,7 +24,7 @@ function getDateFilter(period: Period) {
 
   if (period === "month") {
     const monthAgo = new Date(now);
-    monthAgo.setMonth(monthAgo.getMonth() - 1);
+    monthAgo.setDate(monthAgo.getDate() - 30);
     return { start: monthAgo, end: now };
   }
 
@@ -56,7 +56,7 @@ async function fetchGroupLeaderboardData(
   const [items, totalResult, statsResult] = await Promise.all([
     db
       .select({
-        rank: sql<number>`ROW_NUMBER() OVER (ORDER BY ${orderByColumn} DESC)`.as("rank"),
+        rank: sql<number>`ROW_NUMBER() OVER (ORDER BY ${orderByColumn} DESC, ${groups.id} ASC)`.as("rank"),
         groupId: groups.id,
         name: groups.name,
         slug: groups.slug,
@@ -72,12 +72,14 @@ async function fetchGroupLeaderboardData(
       .leftJoin(submissions, submissionJoinCondition)
       .where(eq(groups.isPublic, true))
       .groupBy(groups.id, groups.name, groups.slug, groups.description, groups.avatarUrl)
-      .orderBy(desc(orderByColumn))
+      .orderBy(desc(orderByColumn), asc(groups.id))
       .limit(limit)
       .offset(offset),
     db
-      .select({ count: sql<number>`COUNT(*)`.as("count") })
+      .select({ count: sql<number>`COUNT(DISTINCT ${groups.id})`.as("count") })
       .from(groups)
+      .innerJoin(groupMembers, eq(groupMembers.groupId, groups.id))
+      .innerJoin(users, eq(users.id, groupMembers.userId))
       .where(eq(groups.isPublic, true)),
     db
       .select({

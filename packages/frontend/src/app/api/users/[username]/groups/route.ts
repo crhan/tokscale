@@ -29,7 +29,7 @@ export async function GET(
         isPublic: groups.isPublic,
         role: groupMembers.role,
         memberCount: sql<number>`(
-          SELECT COUNT(${groupMembers.id})
+          SELECT CAST(COUNT(${groupMembers.id}) AS integer)
           FROM ${groupMembers}
           WHERE ${groupMembers.groupId} = ${groups.id}
         )`.as("member_count"),
