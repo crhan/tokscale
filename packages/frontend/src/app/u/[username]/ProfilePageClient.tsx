@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { useRouter } from "nextjs-toploader/app";
 import styled from "styled-components";
 import { Navigation } from "@/components/layout/Navigation";
 import { Footer } from "@/components/layout/Footer";
@@ -54,9 +55,53 @@ interface ProfilePageClientProps {
   username: string;
 }
 
+interface UserGroupItem {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  avatarUrl: string | null;
+  isPublic: boolean;
+  role: "owner" | "admin" | "member";
+  memberCount: number;
+}
+
 export default function ProfilePageClient({ initialData, username }: ProfilePageClientProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<ProfileTab>("activity");
+  const [userGroups, setUserGroups] = useState<UserGroupItem[]>([]);
+  const [isGroupsLoading, setIsGroupsLoading] = useState(true);
   const data = initialData;
+
+  useEffect(() => {
+    const abortController = new AbortController();
+
+    const fetchGroups = async () => {
+      setIsGroupsLoading(true);
+      try {
+        const response = await fetch(`/api/users/${username}/groups`, {
+          signal: abortController.signal,
+        });
+
+        if (!response.ok) {
+          setUserGroups([]);
+          return;
+        }
+
+        const result = (await response.json()) as { groups?: UserGroupItem[] };
+        setUserGroups(result.groups ?? []);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          setUserGroups([]);
+        }
+      } finally {
+        setIsGroupsLoading(false);
+      }
+    };
+
+    fetchGroups();
+    return () => abortController.abort();
+  }, [username]);
 
   const graphData: TokenContributionData | null = useMemo(() => {
     if (!data || data.contributions.length === 0) return null;
@@ -181,6 +226,34 @@ const EARLY_ADOPTERS = ["code-yeongyu", "gtg7784", "qodot"];
           )}
           {activeTab === "breakdown" && <TokenBreakdown stats={stats} />}
           {activeTab === "models" && <ProfileModels models={data.models} modelUsage={data.modelUsage} />}
+
+          <GroupsSection>
+            <GroupsSectionHeader>Groups</GroupsSectionHeader>
+            {isGroupsLoading ? (
+              <GroupsLoadingText>Loading groups...</GroupsLoadingText>
+            ) : userGroups.length > 0 ? (
+              <GroupsList>
+                {userGroups.map((group: UserGroupItem) => (
+                  <GroupCard
+                    key={group.id}
+                    onClick={() => router.push(`/groups/${group.slug}`)}
+                  >
+                    <GroupCardTop>
+                      <GroupName>{group.name}</GroupName>
+                      <RoleBadge>{group.role}</RoleBadge>
+                    </GroupCardTop>
+                    {group.description && <GroupDescription>{group.description}</GroupDescription>}
+                    <GroupMeta>{group.memberCount} members</GroupMeta>
+                  </GroupCard>
+                ))}
+              </GroupsList>
+            ) : (
+              <NoGroupsCard>
+                <NoGroupsText>No groups yet</NoGroupsText>
+                <CreateGroupLink href="/groups/new">Create Group</CreateGroupLink>
+              </NoGroupsCard>
+            )}
+          </GroupsSection>
         </ContentWrapper>
       </MainContent>
 
@@ -266,4 +339,122 @@ const ActivitySection = styled.div`
   display: flex;
   flex-direction: column;
   gap: 24px;
+`;
+
+const GroupsSection = styled.section`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+`;
+
+const GroupsSectionHeader = styled.h2`
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+`;
+
+const GroupsLoadingText = styled.p`
+  font-size: 14px;
+  color: var(--color-fg-muted);
+`;
+
+const GroupsList = styled.div`
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+
+  &::-webkit-scrollbar {
+    height: 6px;
+  }
+`;
+
+const GroupCard = styled.button`
+  min-width: 220px;
+  border: 1px solid var(--color-border-default);
+  border-radius: 12px;
+  background-color: var(--color-bg-default);
+  padding: 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+
+  &:hover {
+    border-color: var(--color-primary);
+    background-color: rgba(0, 115, 255, 0.04);
+  }
+`;
+
+const GroupCardTop = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+`;
+
+const GroupName = styled.p`
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-fg-default);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const RoleBadge = styled.span`
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #0073ff;
+  background-color: rgba(0, 115, 255, 0.1);
+  text-transform: capitalize;
+`;
+
+const GroupDescription = styled.p`
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--color-fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+`;
+
+const GroupMeta = styled.p`
+  font-size: 12px;
+  color: var(--color-fg-subtle);
+`;
+
+const NoGroupsCard = styled.div`
+  border: 1px solid var(--color-border-default);
+  border-radius: 12px;
+  background-color: var(--color-bg-default);
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+`;
+
+const NoGroupsText = styled.p`
+  font-size: 14px;
+  color: var(--color-fg-muted);
+`;
+
+const CreateGroupLink = styled.a`
+  border-radius: 8px;
+  border: 1px solid var(--color-border-default);
+  background-color: var(--color-bg-elevated);
+  color: var(--color-fg-default);
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  padding: 6px 10px;
+  transition: all 0.15s;
+
+  &:hover {
+    border-color: var(--color-primary);
+    color: #0073ff;
+  }
 `;

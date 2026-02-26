@@ -68,6 +68,32 @@ const TabSection = styled.div`
   margin-bottom: 24px;
 `;
 
+const ViewToggleContainer = styled.div`
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border-default);
+  background-color: var(--color-bg-elevated);
+`;
+
+const ViewToggleButton = styled.button<{ $active: boolean }>`
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: ${({ $active }) => ($active ? "#fff" : "var(--color-fg-muted)")};
+  background-color: ${({ $active }) => ($active ? "#0073FF" : "transparent")};
+
+  &:hover {
+    color: ${({ $active }) => ($active ? "#fff" : "var(--color-fg-default)")};
+  }
+`;
+
 const TableContainer = styled.div`
   border-radius: 16px;
   border: 1px solid var(--color-border-default);
@@ -337,6 +363,26 @@ const Username = styled.p`
   }
 `;
 
+const GroupAvatar = styled.div`
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--color-bg-subtle);
+  color: var(--color-fg-default);
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+  overflow: hidden;
+`;
+
+const GroupMembersText = styled.span`
+  color: var(--color-fg-muted);
+  font-size: 14px;
+`;
+
 const StatSpan = styled.span`
   font-weight: 500;
   font-size: 14px;
@@ -445,6 +491,30 @@ const CTASection = styled.div`
   border-radius: 16px;
   border: 1px solid var(--color-border-default);
   background-color: var(--color-bg-default);
+`;
+
+const GroupCTASection = styled.div`
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+`;
+
+const GroupCTAButton = styled.a`
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background-color: #0073FF;
+  color: #fff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.15s;
+
+  &:hover {
+    background-color: #005fcc;
+  }
 `;
 
 const CTATitle = styled.h2`
@@ -756,6 +826,37 @@ export interface LeaderboardData {
   sortBy?: 'tokens' | 'cost';
 }
 
+interface GroupLeaderboardItem {
+  rank: number;
+  groupId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  avatarUrl: string | null;
+  memberCount: number;
+  totalTokens: number;
+  totalCost: number;
+}
+
+interface GroupLeaderboardResponse {
+  groups: GroupLeaderboardItem[];
+  pagination: {
+    page: number;
+    limit: number;
+    totalGroups: number;
+    totalPages: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+  stats: {
+    totalGroups: number;
+    totalTokens: number;
+    totalCost: number;
+  };
+  period: Period;
+  sortBy: 'tokens' | 'cost';
+}
+
 interface LeaderboardClientProps {
   initialData: LeaderboardData;
   currentUser: { id: string; username: string; displayName: string | null; avatarUrl: string | null } | null;
@@ -771,6 +872,17 @@ function isValidLeaderboardData(data: unknown): data is LeaderboardData {
     "pagination" in data &&
     "stats" in data &&
     Array.isArray((data as LeaderboardData).users)
+  );
+}
+
+function isValidGroupLeaderboardData(data: unknown): data is GroupLeaderboardResponse {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "groups" in data &&
+    "pagination" in data &&
+    "stats" in data &&
+    Array.isArray((data as GroupLeaderboardResponse).groups)
   );
 }
 
@@ -845,7 +957,9 @@ const LeaderboardRow = memo(function LeaderboardRow({
 
 export default function LeaderboardClient({ initialData, currentUser, initialSortBy, initialUserRank }: LeaderboardClientProps) {
   const router = useRouter();
+  const [view, setView] = useState<'users' | 'groups'>('users');
   const [data, setData] = useState<LeaderboardData>(initialData);
+  const [groupData, setGroupData] = useState<GroupLeaderboardResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
@@ -862,6 +976,7 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
   const prevPeriodRef = useRef<Period>(initialData.period);
   const prevPageRef = useRef(initialData.pagination.page);
   const prevSortByRef = useRef(initialSortBy);
+  const prevViewRef = useRef<'users' | 'groups'>('users');
 
   const isFirstRankFetch = useRef(true);
 
@@ -924,6 +1039,33 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
       });
   };
 
+  const fetchGroupData = (
+    targetPeriod: Period,
+    targetSortBy: 'tokens' | 'cost',
+    signal?: AbortSignal
+  ) => {
+    setIsLoading(true);
+    setError(null);
+    fetch(`/api/leaderboard/groups?period=${targetPeriod}&sortBy=${targetSortBy}&page=1&limit=20`, { signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((result) => {
+        if (!isValidGroupLeaderboardData(result)) {
+          throw new Error("Invalid response format");
+        }
+        setGroupData(result);
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        if (err.name !== "AbortError") {
+          setError(err.message || "Failed to load");
+          setIsLoading(false);
+        }
+      });
+  };
+
   useEffect(() => {
     if (isFirstMount.current) {
       isFirstMount.current = false;
@@ -934,19 +1076,25 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
     const periodChanged = period !== prevPeriodRef.current;
     const pageChanged = page !== prevPageRef.current;
     const sortByChanged = effectiveSortBy !== prevSortByRef.current;
+    const viewChanged = view !== prevViewRef.current;
 
-    if (!periodChanged && !pageChanged && !sortByChanged) {
+    if (!periodChanged && !pageChanged && !sortByChanged && !viewChanged) {
       return;
     }
 
     prevPeriodRef.current = period;
     prevPageRef.current = page;
     prevSortByRef.current = effectiveSortBy;
+    prevViewRef.current = view;
 
     const abortController = new AbortController();
-    fetchData(period, page, effectiveSortBy, abortController.signal);
+    if (view === 'groups') {
+      fetchGroupData(period, effectiveSortBy, abortController.signal);
+    } else {
+      fetchData(period, page, effectiveSortBy, abortController.signal);
+    }
     return () => abortController.abort();
-  }, [period, page, effectiveSortBy]);
+  }, [period, page, effectiveSortBy, view]);
 
   useEffect(() => {
     if (data.pagination.totalPages > 0 && page > data.pagination.totalPages) {
@@ -955,6 +1103,7 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
   }, [data.pagination.totalPages, page]);
 
   const sortedUsers = data.users || [];
+  const sortedGroups = groupData?.groups || [];
 
   const handleCopyCommand = (command: string) => {
     navigator.clipboard.writeText(command);
@@ -966,6 +1115,10 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
     router.push(`/u/${username}`);
   }, [router]);
 
+  const handleGroupRowClick = useCallback((slug: string) => {
+    router.push(`/groups/${slug}`);
+  }, [router]);
+
   return (
     <>
       <Section>
@@ -974,36 +1127,36 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
 
         <StatsGrid>
           <StatCard>
-            <StatLabel>Users</StatLabel>
-            <StatValue>{data.stats.uniqueUsers}</StatValue>
+            <StatLabel>{view === 'users' ? 'Users' : 'Groups'}</StatLabel>
+            <StatValue>{view === 'users' ? data.stats.uniqueUsers : (groupData?.stats.totalGroups ?? 0)}</StatValue>
           </StatCard>
           <StatCard>
             <StatLabel>Total Tokens</StatLabel>
             <StatValuePrimary>
-              <HoverTooltip data-tooltip={data.stats.totalTokens.toLocaleString('en-US')}>
-                {formatNumber(data.stats.totalTokens)}
+              <HoverTooltip data-tooltip={(view === 'users' ? data.stats.totalTokens : (groupData?.stats.totalTokens ?? 0)).toLocaleString('en-US')}>
+                {formatNumber(view === 'users' ? data.stats.totalTokens : (groupData?.stats.totalTokens ?? 0))}
               </HoverTooltip>
             </StatValuePrimary>
           </StatCard>
           <StatCard>
             <StatLabel>Total Cost</StatLabel>
             <StatValue>
-              <HoverTooltip data-tooltip={data.stats.totalCost.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })}>
-                {formatCurrency(data.stats.totalCost)}
+              <HoverTooltip data-tooltip={(view === 'users' ? data.stats.totalCost : (groupData?.stats.totalCost ?? 0)).toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })}>
+                {formatCurrency(view === 'users' ? data.stats.totalCost : (groupData?.stats.totalCost ?? 0))}
               </HoverTooltip>
             </StatValue>
           </StatCard>
         </StatsGrid>
       </Section>
 
-      {currentUser && currentUserRankError && (
+      {view === 'users' && currentUser && currentUserRankError && (
         <ErrorBanner>
           <span>⚠️</span>
           <span>Unable to load your ranking. Please refresh the page.</span>
         </ErrorBanner>
       )}
 
-      {currentUser && currentUserRank && (
+      {view === 'users' && currentUser && currentUserRank && (
         <CurrentUserCard>
           <CurrentUserInfo>
             <img
@@ -1047,6 +1200,15 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
         </CurrentUserCard>
       )}
 
+      <ViewToggleContainer>
+        <ViewToggleButton $active={view === 'users'} onClick={() => setView('users')}>
+          Users
+        </ViewToggleButton>
+        <ViewToggleButton $active={view === 'groups'} onClick={() => setView('groups')}>
+          Groups
+        </ViewToggleButton>
+      </ViewToggleContainer>
+
       <TabSection>
         <TabBar
           tabs={[
@@ -1079,104 +1241,178 @@ export default function LeaderboardClient({ initialData, currentUser, initialSor
           <EmptyState>
             <EmptyMessage>Failed to load leaderboard</EmptyMessage>
             <EmptyHint>{error}</EmptyHint>
-            <RetryButton onClick={() => fetchData(period, page, effectiveSortBy)}>
+            <RetryButton onClick={() => view === 'groups' ? fetchGroupData(period, effectiveSortBy) : fetchData(period, page, effectiveSortBy)}>
               Retry
             </RetryButton>
           </EmptyState>
         </TableContainer>
       ) : (
         <TableContainer>
-          {data.users.length === 0 ? (
-            <EmptyState>
-              <EmptyMessage>No submissions yet. Be the first!</EmptyMessage>
-              <EmptyHint>
-                Run <CodeSnippet>tokscale login && tokscale submit</CodeSnippet>
-              </EmptyHint>
-            </EmptyState>
+          {view === 'users' ? (
+            data.users.length === 0 ? (
+              <EmptyState>
+                <EmptyMessage>No submissions yet. Be the first!</EmptyMessage>
+                <EmptyHint>
+                  Run <CodeSnippet>tokscale login && tokscale submit</CodeSnippet>
+                </EmptyHint>
+              </EmptyState>
+            ) : (
+              <>
+                <TableWrapper>
+                  <Table>
+                    <TableHead>
+                      <tr>
+                        <TableHeaderCell className="rank-cell">Rank</TableHeaderCell>
+                        <TableHeaderCell>User</TableHeaderCell>
+                        <TableHeaderCell className="text-right hidden-cost-mobile">Cost</TableHeaderCell>
+                        <TableHeaderCell className="text-right">Tokens</TableHeaderCell>
+                        <TableHeaderCell className="text-right hidden-mobile w-24">Submits</TableHeaderCell>
+                      </tr>
+                    </TableHead>
+                    <TableBody>
+                      {sortedUsers.map((user: LeaderboardUser, index: number) => (
+                        <LeaderboardRow
+                          key={user.userId}
+                          user={user}
+                          isCurrentUser={!!(currentUser && user.username === currentUser.username)}
+                          isLastRow={index === sortedUsers.length - 1}
+                          onRowClick={handleRowClick}
+                        />
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableWrapper>
+
+                {data.pagination.totalPages > 1 && (
+                  <PaginationContainer>
+                    <PaginationText>
+                      Showing {(data.pagination.page - 1) * data.pagination.limit + 1}-
+                      {Math.min(data.pagination.page * data.pagination.limit, data.pagination.totalUsers)} of{" "}
+                      {data.pagination.totalUsers}
+                    </PaginationText>
+                    <PaginationNav>
+                      <PageButton
+                        disabled={data.pagination.page <= 1}
+                        onClick={() => setPage(data.pagination.page - 1)}
+                        aria-label="Previous page"
+                      >
+                        ←
+                      </PageButton>
+                      <PaginationPages>
+                        {(() => {
+                          const pages: unknown[] = [];
+                          const total = data.pagination.totalPages;
+                          const current = data.pagination.page;
+                          const delta = 2;
+                          const visible = new Set<number>();
+                          visible.add(1);
+                          visible.add(total);
+                          for (let i = Math.max(2, current - delta); i <= Math.min(total - 1, current + delta); i++) {
+                            visible.add(i);
+                          }
+
+                          const sorted = Array.from(visible).sort((a, b) => a - b);
+                          let last = 0;
+                          for (const p of sorted) {
+                            if (last && p - last > 1) {
+                              pages.push(<PageEllipsis key={`e${p}`}>…</PageEllipsis>);
+                            }
+                            pages.push(
+                              <PageButton key={p} $active={p === current} onClick={() => setPage(p)}>
+                                {p}
+                              </PageButton>
+                            );
+                            last = p;
+                          }
+                          return pages;
+                        })()}
+                      </PaginationPages>
+                      <PageButton
+                        disabled={data.pagination.page >= data.pagination.totalPages}
+                        onClick={() => setPage(data.pagination.page + 1)}
+                        aria-label="Next page"
+                      >
+                        →
+                      </PageButton>
+                    </PaginationNav>
+                  </PaginationContainer>
+                )}
+              </>
+            )
           ) : (
             <>
-              <TableWrapper>
-                <Table>
-                  <TableHead>
-                    <tr>
-                      <TableHeaderCell className="rank-cell">Rank</TableHeaderCell>
-                      <TableHeaderCell>User</TableHeaderCell>
-                      <TableHeaderCell className="text-right hidden-cost-mobile">Cost</TableHeaderCell>
-                      <TableHeaderCell className="text-right">Tokens</TableHeaderCell>
-                      <TableHeaderCell className="text-right hidden-mobile w-24">Submits</TableHeaderCell>
-                    </tr>
-                  </TableHead>
-                  <TableBody>
-                    {sortedUsers.map((user, index) => (
-                      <LeaderboardRow
-                        key={user.userId}
-                        user={user}
-                        isCurrentUser={!!(currentUser && user.username === currentUser.username)}
-                        isLastRow={index === sortedUsers.length - 1}
-                        onRowClick={handleRowClick}
-                      />
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableWrapper>
-
-              {data.pagination.totalPages > 1 && (
-                <PaginationContainer>
-                  <PaginationText>
-                    Showing {(data.pagination.page - 1) * data.pagination.limit + 1}-
-                    {Math.min(data.pagination.page * data.pagination.limit, data.pagination.totalUsers)} of{" "}
-                    {data.pagination.totalUsers}
-                  </PaginationText>
-                  <PaginationNav>
-                    <PageButton
-                      disabled={data.pagination.page <= 1}
-                      onClick={() => setPage(data.pagination.page - 1)}
-                      aria-label="Previous page"
-                    >
-                      ←
-                    </PageButton>
-                    <PaginationPages>
-                      {(() => {
-                        const pages: React.ReactNode[] = [];
-                        const total = data.pagination.totalPages;
-                        const current = data.pagination.page;
-                        const delta = 2;
-                        const visible = new Set<number>();
-                        visible.add(1);
-                        visible.add(total);
-                        for (let i = Math.max(2, current - delta); i <= Math.min(total - 1, current + delta); i++) {
-                          visible.add(i);
-                        }
-
-                        const sorted = Array.from(visible).sort((a, b) => a - b);
-                        let last = 0;
-                        for (const p of sorted) {
-                          if (last && p - last > 1) {
-                            pages.push(<PageEllipsis key={`e${p}`}>…</PageEllipsis>);
-                          }
-                          pages.push(
-                            <PageButton key={p} $active={p === current} onClick={() => setPage(p)}>
-                              {p}
-                            </PageButton>
-                          );
-                          last = p;
-                        }
-                        return pages;
-                      })()}
-                    </PaginationPages>
-                    <PageButton
-                      disabled={data.pagination.page >= data.pagination.totalPages}
-                      onClick={() => setPage(data.pagination.page + 1)}
-                      aria-label="Next page"
-                    >
-                      →
-                    </PageButton>
-                  </PaginationNav>
-                </PaginationContainer>
+              {sortedGroups.length === 0 ? (
+                <EmptyState>
+                  <EmptyMessage>No groups ranked yet</EmptyMessage>
+                  <EmptyHint>Create a group and submit data to start ranking.</EmptyHint>
+                </EmptyState>
+              ) : (
+                <TableWrapper>
+                  <Table>
+                    <TableHead>
+                      <tr>
+                        <TableHeaderCell className="rank-cell">Rank</TableHeaderCell>
+                        <TableHeaderCell>Group</TableHeaderCell>
+                        <TableHeaderCell className="text-right hidden-cost-mobile">Members</TableHeaderCell>
+                        <TableHeaderCell className="text-right hidden-cost-mobile">Cost</TableHeaderCell>
+                        <TableHeaderCell className="text-right">Tokens</TableHeaderCell>
+                      </tr>
+                    </TableHead>
+                    <TableBody>
+                      {sortedGroups.map((group: GroupLeaderboardItem, index: number) => (
+                        <TableRow
+                          key={group.groupId}
+                          onClick={() => handleGroupRowClick(group.slug)}
+                          style={index === sortedGroups.length - 1 ? undefined : { borderBottom: "1px solid var(--color-border-default)" }}
+                        >
+                          <TableCell className="rank-cell">
+                            <RankBadge data-rank={group.rank <= 3 ? group.rank : undefined}>#{group.rank}</RankBadge>
+                          </TableCell>
+                          <TableCell>
+                            <UserContainer>
+                              <GroupAvatar>
+                                {group.avatarUrl ? (
+                                  <img
+                                    src={group.avatarUrl}
+                                    alt={group.name}
+                                    width={40}
+                                    height={40}
+                                    style={{ borderRadius: "50%", objectFit: "cover", width: "40px", height: "40px" }}
+                                  />
+                                ) : (
+                                  group.name.slice(0, 2).toUpperCase()
+                                )}
+                              </GroupAvatar>
+                              <UserInfo>
+                                <UserDisplayName>{group.name}</UserDisplayName>
+                                <Username>@{group.slug}</Username>
+                              </UserInfo>
+                            </UserContainer>
+                          </TableCell>
+                          <TableCell className="text-right hidden-cost-mobile">
+                            <GroupMembersText>{formatNumber(group.memberCount)}</GroupMembersText>
+                          </TableCell>
+                          <TableCell className="text-right hidden-cost-mobile">
+                            <StatSpan>{formatCurrency(group.totalCost)}</StatSpan>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <TokenValue>{formatNumber(group.totalTokens)}</TokenValue>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </TableWrapper>
               )}
             </>
           )}
         </TableContainer>
+      )}
+
+      {view === 'groups' && (
+        <GroupCTASection>
+          <GroupCTAButton href="/groups/new">+ Create Group</GroupCTAButton>
+        </GroupCTASection>
       )}
 
       <CTASection>
