@@ -45,7 +45,7 @@ export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   apiTokens: many(apiTokens),
   submissions: many(submissions),
-  groupMemberships: many(groupMembers),
+  groupMemberships: many(groupMembers, { relationName: "memberUser" }),
   createdGroups: many(groups),
 }));
 
@@ -345,10 +345,12 @@ export const groupMembersRelations = relations(groupMembers, ({ one }) => ({
   user: one(users, {
     fields: [groupMembers.userId],
     references: [users.id],
+    relationName: "memberUser",
   }),
   inviter: one(users, {
     fields: [groupMembers.invitedBy],
     references: [users.id],
+    relationName: "memberInviter",
   }),
 }));
 
@@ -394,10 +396,12 @@ export const groupInvitesRelations = relations(groupInvites, ({ one }) => ({
   invitedUser: one(users, {
     fields: [groupInvites.invitedUserId],
     references: [users.id],
+    relationName: "inviteTarget",
   }),
   inviter: one(users, {
     fields: [groupInvites.invitedBy],
     references: [users.id],
+    relationName: "inviteCreator",
   }),
 }));
 
