@@ -2718,7 +2718,7 @@ fn run_submit_command(
         Some(creds) => creds,
         None => {
             eprintln!("\n  {}", "Not logged in.".yellow());
-            eprintln!("{}", "  Run 'tokscale login' first.\n".bright_black());
+            eprintln!("{}", "  Run 'bunx tokscale@latest login' first.\n".bright_black());
             std::process::exit(1);
         }
     };

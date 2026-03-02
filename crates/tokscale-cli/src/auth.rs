@@ -153,7 +153,7 @@ pub async fn login() -> Result<()> {
         );
         println!(
             "{}",
-            "  Run 'tokscale logout' to sign out first.\n".bright_black()
+            "  Run 'bunx tokscale@latest logout' to sign out first.\n".bright_black()
         );
         return Ok(());
     }
@@ -228,7 +228,7 @@ pub async fn login() -> Result<()> {
                             );
                             println!(
                                 "{}",
-                                "  You can now use 'tokscale submit' to share your usage.\n"
+                                "  You can now use 'bunx tokscale@latest submit' to share your usage.\n"
                                     .bright_black()
                             );
                             return Ok(());
@@ -291,7 +291,7 @@ pub fn whoami() -> Result<()> {
         println!("\n  {}", "Not logged in.".yellow());
         println!(
             "{}",
-            "  Run 'tokscale login' to authenticate.\n".bright_black()
+            "  Run 'bunx tokscale@latest login' to authenticate.\n".bright_black()
         );
         return Ok(());
     };
