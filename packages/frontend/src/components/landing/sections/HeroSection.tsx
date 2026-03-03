@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import Image from "next/image";
 import styled from "styled-components";
+import { WebMVideo } from "../components/WebMVideo";
 
 interface HeroSectionProps {
   stargazersCount: number;
@@ -39,14 +40,13 @@ export function HeroSection({ stargazersCount }: HeroSectionProps) {
             height={536}
           />
           <HeroVideo
+            webmSrc="/assets/landing/hero-video-transparent.webm"
+            mp4FallbackSrc="/assets/landing/hero-video-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          >
-            <source src="/assets/landing/hero-video-transparent.webm" type="video/webm" />
-            <source src="/assets/landing/hero-video-transparent.mp4" type="video/mp4" />
-          </HeroVideo>
+          />
         </HeroLeft>
 
         <HeroRight>
@@ -214,7 +214,7 @@ const HeroBgStarfield = styled(Image)`
   }
 `;
 
-const HeroVideo = styled.video`
+const HeroVideo = styled(WebMVideo)`
   position: relative;
   width: 552px;
   max-width: 552px;

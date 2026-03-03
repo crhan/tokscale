@@ -5,6 +5,7 @@ import Image from "next/image";
 import styled from "styled-components";
 import { useSquircleClip } from "../hooks";
 import { SquircleBorder } from "../components";
+import { WebMVideo } from "../components/WebMVideo";
 
 import type { LeaderboardUser } from "@/lib/leaderboard/getLeaderboard";
 
@@ -99,14 +100,13 @@ export function WorldwideSection({
           <GlobeFadeTop />
           <GlobeFadeBottom />
           <TrophyVideo
+            webmSrc="/assets/landing/trophy-cup-transparent.webm"
+            mp4FallbackSrc="/assets/landing/trophy-cup-transparent.mp4"
             autoPlay
             loop
             muted
             playsInline
-          >
-            <source src="/assets/landing/trophy-cup-transparent.webm" type="video/webm" />
-            <source src="/assets/landing/trophy-cup-transparent.mp4" type="video/mp4" />
-          </TrophyVideo>
+          />
         </GlobeImageWrapper>
         <GlobeContentStack>
           <GlobeBlueHeader ref={blueHeaderRef}>
@@ -530,7 +530,7 @@ const UserValue = styled.span`
   margin-left: auto;
 `;
 
-const TrophyVideo = styled.video`
+const TrophyVideo = styled(WebMVideo)`
   position: absolute;
 
   width: 396px;
