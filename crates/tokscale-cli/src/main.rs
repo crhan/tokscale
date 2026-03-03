@@ -3092,8 +3092,8 @@ fn run_submit_command(
         let all_clients: Vec<ClientId> = ClientId::iter().collect();
         let enabled_set: HashSet<ClientId> = all_clients.iter().copied().collect();
         let loader = DataLoader::with_filters(None, None, None, None);
-        if let Ok(data) = loader.load(&all_clients, &GroupBy::default(), true) {
-            save_cached_data(&data, &enabled_set, true);
+        if let Ok(data) = loader.load(&all_clients, &GroupBy::default(), false) {
+            save_cached_data(&data, &enabled_set, false);
         }
     }
 
