@@ -544,7 +544,7 @@ const TrophyVideo = styled.video`
   left: 50%;
   transform: translate(-50%, -50%);
   object-fit: contain;
-  mix-blend-mode: screen;
+  mix-blend-mode: lighten;
   pointer-events: none;
   z-index: 2;
 `;
