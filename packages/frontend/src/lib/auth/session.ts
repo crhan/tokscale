@@ -150,48 +150,44 @@ export async function validateApiToken(
 
 /**
  * Get session from Authorization header (for API routes).
+ * Falls back to cookie-based session when no Authorization header is present,
+ * so web UI fetches (which send cookies, not headers) work automatically.
  */
 export async function getSessionFromHeader(
   request: Request
 ): Promise<SessionUser | null> {
   const authHeader = request.headers.get("Authorization");
-
-  if (!authHeader) {
-    return null;
-  }
-
-  // Support "Bearer <token>" format
-  const token = authHeader.startsWith("Bearer ")
-    ? authHeader.slice(7)
+  if (authHeader) {
+    // Support "Bearer <token>" format
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
     : authHeader;
+    if (token.startsWith("tt_")) {
+      return validateApiToken(token);
+    }
 
-  // Check if it's an API token (CLI)
-  if (token.startsWith("tt_")) {
-    return validateApiToken(token);
-  }
-
-  // Otherwise treat as session token (web)
-  const result = await db
-    .select({
-      session: sessions,
-      user: users,
-    })
-    .from(sessions)
-    .innerJoin(users, eq(sessions.userId, users.id))
-    .where(and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())))
+    // Otherwise treat as session token
+    const result = await db
+      .select({
+        session: sessions,
+        user: users,
+      })
+      .from(sessions)
+      .innerJoin(users, eq(sessions.userId, users.id))
+      .where(and(eq(sessions.token, token), gt(sessions.expiresAt, new Date())))
     .limit(1);
-
-  if (result.length === 0) {
-    return null;
+    if (result.length > 0) {
+      const { user } = result[0];
+      return {
+        id: user.id,
+        username: user.username,
+        displayName: user.displayName,
+        avatarUrl: user.avatarUrl,
+        isAdmin: user.isAdmin,
+      };
+    }
   }
 
-  const { user } = result[0];
-
-  return {
-    id: user.id,
-    username: user.username,
-    displayName: user.displayName,
-    avatarUrl: user.avatarUrl,
-    isAdmin: user.isAdmin,
-  };
+  // Fallback: check cookie session (web UI flow)
+  return getSession();
 }

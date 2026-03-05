@@ -91,7 +91,7 @@ export async function GET(request: Request) {
             createdAt: groups.createdAt,
             updatedAt: groups.updatedAt,
             role: groupMembers.role,
-            memberCount: sql<number>`(SELECT COUNT(*) FROM "group_members" WHERE "group_members"."group_id" = ${groups.id})`.as(
+            memberCount: sql<number>`CAST((SELECT COUNT(*) FROM "group_members" WHERE "group_members"."group_id" = ${groups.id}) AS integer)`.as(
               "member_count"
             ),
           })

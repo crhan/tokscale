@@ -117,27 +117,17 @@ async function fetchGroupLeaderboardData(
     .offset(offset);
 
   // Member count + total stats for this group
-  const [results, memberCount, submittedUserCount, groupStats] = await Promise.all([
+  const [results, memberCount, groupStats] = await Promise.all([
     leaderboardQuery,
     db
       .select({ count: sql<number>`COUNT(*)`.as("count") })
       .from(groupMembers)
       .where(eq(groupMembers.groupId, groupId)),
     db
-      .select({ count: sql<number>`COUNT(DISTINCT ${submissions.userId})`.as("count") })
-      .from(submissions)
-      .innerJoin(
-        groupMembers,
-        and(
-          eq(groupMembers.userId, submissions.userId),
-          eq(groupMembers.groupId, groupId)
-        )
-      )
-      .where(dateFilter),
-    db
       .select({
         totalTokens: sql<number>`SUM(${submissions.totalTokens})`,
         totalCost: sql<number>`SUM(CAST(${submissions.totalCost} AS DECIMAL(12,4)))`,
+        submittedUserCount: sql<number>`COUNT(DISTINCT ${submissions.userId})`,
       })
       .from(submissions)
       .innerJoin(
@@ -149,9 +139,8 @@ async function fetchGroupLeaderboardData(
       )
       .where(dateFilter),
   ]);
-
   const totalMembers = Number(memberCount[0]?.count) || 0;
-  const totalSubmittedUsers = Number(submittedUserCount[0]?.count) || 0;
+  const totalSubmittedUsers = Number(groupStats[0]?.submittedUserCount) || 0;
   const totalPages = Math.ceil(totalSubmittedUsers / limit);
 
   return {

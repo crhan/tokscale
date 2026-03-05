@@ -66,24 +66,7 @@ const ActionButton = styled.a`
   }
 `;
 
-const ActionLink = styled(Link)`
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border-default);
-  background: transparent;
-  color: var(--color-fg-muted);
-  font-size: 13px;
-  cursor: pointer;
-  text-decoration: none;
-  transition: all 0.15s;
-
-  &:hover {
-    border-color: #0073ff;
-    color: var(--color-fg-default);
-  }
-`;
+const ActionLink = styled(ActionButton).attrs({ as: Link })``;
 
 const PrimaryActionButton = styled(ActionButton)`
   background-color: #0073ff;

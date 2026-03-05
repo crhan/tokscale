@@ -296,7 +296,7 @@ export const groups = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index("idx_groups_slug").on(table.slug),
+    // slug index omitted: UNIQUE constraint on slug already creates one
     index("idx_groups_created_by").on(table.createdBy),
     index("idx_groups_is_public").on(table.isPublic),
   ]
@@ -331,7 +331,7 @@ export const groupMembers = pgTable(
       .defaultNow(),
   },
   (table) => [
-    index("idx_group_members_group_id").on(table.groupId),
+    // group_id index omitted: composite unique on (group_id, user_id) already indexes group_id
     index("idx_group_members_user_id").on(table.userId),
     unique("group_members_group_user_unique").on(table.groupId, table.userId),
   ]
@@ -383,7 +383,7 @@ export const groupInvites = pgTable(
   (table) => [
     index("idx_group_invites_group_id").on(table.groupId),
     index("idx_group_invites_invited_user_id").on(table.invitedUserId),
-    index("idx_group_invites_token").on(table.token),
+    // token index omitted: UNIQUE constraint on token already creates one
     index("idx_group_invites_status").on(table.status),
   ]
 );

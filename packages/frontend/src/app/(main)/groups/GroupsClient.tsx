@@ -193,10 +193,12 @@ export default function GroupsClient({ currentUser }: GroupsClientProps) {
         return res.json();
       })
       .then((result) => {
-        setData(result);
+        if (!abortController.signal.aborted) {
+          setData(result);
+        }
       })
       .catch((err) => {
-        if (err.name !== "AbortError") {
+        if (err.name !== "AbortError" && !abortController.signal.aborted) {
           setData(null);
         }
       })
