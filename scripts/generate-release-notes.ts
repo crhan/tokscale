@@ -113,7 +113,7 @@ function findAssociatedPR(commitHash: string): PRInfo | null {
   if (!pr?.number || !pr.user?.login) return null;
 
   let title = pr.title;
-  if (title.includes("…")) {
+  if (title.endsWith("…")) {
     const firstCommitMsg = run(
       "gh",
       [
