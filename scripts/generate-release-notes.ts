@@ -103,29 +103,32 @@ function resolveGitHubUsername(email: string, fallbackName: string): string {
 
 function findAssociatedPR(commitHash: string): PRInfo | null {
   const result = runJson<
-    Array<{ number: number; title: string; user?: { login?: string } }>
+    Array<{ number: number; title: string; state: string; user?: { login?: string } }>
   >(
     "gh",
-    ["api", `repos/${REPO}/commits/${commitHash}/pulls`, "--jq", "."],
+    ["api", `repos/${REPO}/commits/${commitHash}/pulls`],
     true
   );
-  const pr = result?.[0];
+  if (!result?.length) return null;
+
+  const pr = result.find((p) => p.state === "closed") ?? result[0];
   if (!pr?.number || !pr.user?.login) return null;
 
   let title = pr.title;
   if (title.endsWith("…")) {
-    const firstCommitMsg = run(
+    const commits = runJson<Array<{ commit: { message: string } }>>(
       "gh",
-      [
-        "api",
-        `repos/${REPO}/pulls/${pr.number}/commits`,
-        "--jq",
-        ".[0].commit.message",
-      ],
+      ["api", `repos/${REPO}/pulls/${pr.number}/commits`],
       true
     );
-    if (firstCommitMsg) {
-      title = firstCommitMsg.split("\n")[0];
+    if (commits?.length) {
+      const last = commits[commits.length - 1];
+      const lastSubject = last.commit.message.split("\n")[0];
+      const firstSubject = commits[0].commit.message.split("\n")[0];
+      const truncatedPrefix = title.slice(0, -1);
+      title = lastSubject.startsWith(truncatedPrefix) ? lastSubject
+        : firstSubject.startsWith(truncatedPrefix) ? firstSubject
+        : lastSubject;
     }
   }
 
