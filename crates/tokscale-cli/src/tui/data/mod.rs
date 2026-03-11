@@ -294,10 +294,19 @@ impl DataLoader {
             }
 
             for msg in &mut all_messages {
-                sessions::synthetic::normalize_synthetic_gateway_fields(
-                    &mut msg.model_id,
-                    &mut msg.provider_id,
-                );
+                if msg.client == "synthetic" {
+                    continue;
+                }
+                if sessions::synthetic::is_synthetic_model(&msg.model_id)
+                    || sessions::synthetic::is_synthetic_provider(&msg.provider_id)
+                {
+                    msg.client = "synthetic".to_string();
+                    msg.model_id = sessions::synthetic::normalize_synthetic_model(&msg.model_id);
+                    if msg.provider_id.is_empty() || msg.provider_id.eq_ignore_ascii_case("unknown")
+                    {
+                        msg.provider_id = "synthetic".to_string();
+                    }
+                }
             }
         }
 
@@ -308,15 +317,7 @@ impl DataLoader {
         if include_synthetic {
             requested_clients.insert("synthetic".to_string());
         }
-        all_messages.retain(|msg| {
-            requested_clients.contains(&msg.client)
-                || (include_synthetic
-                    && sessions::synthetic::matches_synthetic_filter(
-                        &msg.client,
-                        &msg.model_id,
-                        &msg.provider_id,
-                    ))
-        });
+        all_messages.retain(|msg| requested_clients.contains(&msg.client));
 
         if let Some(svc) = pricing {
             for msg in &mut all_messages {
@@ -957,15 +958,4 @@ mod tests {
         assert_eq!(longest, 2);
     }
 
-    #[test]
-    fn test_synthetic_filter_match_keeps_gateway_messages_with_original_client() {
-        assert!(sessions::synthetic::matches_synthetic_filter(
-            "opencode",
-            "hf:deepseek-ai/DeepSeek-V3-0324",
-            "unknown"
-        ));
-        assert!(!sessions::synthetic::matches_synthetic_filter(
-            "opencode", "gpt-5.2", "openai"
-        ));
-    }
 }
