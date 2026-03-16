@@ -1,4 +1,5 @@
 use super::{aliases, litellm::ModelPricing};
+use crate::TokenBreakdown;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
@@ -137,11 +138,20 @@ impl PricingLookup {
     }
 
     pub fn lookup(&self, model_id: &str) -> Option<LookupResult> {
+        self.lookup_with_provider(model_id, None)
+    }
+
+    pub fn lookup_with_provider(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        let cache_key = build_lookup_cache_key(model_id, provider_id);
         if let Some(cached) = self
             .lookup_cache
             .read()
             .ok()
-            .and_then(|c| c.get(model_id).cloned())
+            .and_then(|c| c.get(&cache_key).cloned())
         {
             return cached.map(|c| LookupResult {
                 pricing: c.pricing,
@@ -150,7 +160,7 @@ impl PricingLookup {
             });
         }
 
-        let result = self.lookup_with_source(model_id, None);
+        let result = self.lookup_with_source_and_provider(model_id, None, provider_id);
 
         if let Ok(mut cache) = self.lookup_cache.write() {
             if cache.len() >= MAX_LOOKUP_CACHE_ENTRIES {
@@ -164,7 +174,7 @@ impl PricingLookup {
                 }
             }
             cache.insert(
-                model_id.to_string(),
+                cache_key,
                 result.as_ref().map(|r| CachedResult {
                     pricing: r.pricing.clone(),
                     source: r.source.clone(),
@@ -181,14 +191,23 @@ impl PricingLookup {
         model_id: &str,
         force_source: Option<&str>,
     ) -> Option<LookupResult> {
+        self.lookup_with_source_and_provider(model_id, force_source, None)
+    }
+
+    pub fn lookup_with_source_and_provider(
+        &self,
+        model_id: &str,
+        force_source: Option<&str>,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
         let canonical = aliases::resolve_alias(model_id).unwrap_or(model_id);
         let lower = canonical.to_lowercase();
 
         // Helper to perform lookup with the given source constraint
         let do_lookup = |id: &str| match force_source {
-            Some("litellm") => self.lookup_litellm_only(id),
-            Some("openrouter") => self.lookup_openrouter_only(id),
-            _ => self.lookup_auto(id),
+            Some("litellm") => self.lookup_litellm_only(id, provider_id),
+            Some("openrouter") => self.lookup_openrouter_only(id, provider_id),
+            _ => self.lookup_auto(id, provider_id),
         };
 
         // 1. Try direct lookup
@@ -210,14 +229,14 @@ impl PricingLookup {
         None
     }
 
-    fn lookup_auto(&self, model_id: &str) -> Option<LookupResult> {
-        if let Some(result) = self.exact_match_litellm(model_id) {
+    fn lookup_auto(&self, model_id: &str, provider_id: Option<&str>) -> Option<LookupResult> {
+        if let Some(result) = self.exact_match_litellm_with_provider(model_id, provider_id) {
             return Some(result);
         }
 
-        let exact_openrouter = self.exact_match_openrouter(model_id);
+        let exact_openrouter = self.exact_match_openrouter_with_provider(model_id, provider_id);
         if let Some(stripped) = strip_known_provider_prefix(model_id) {
-            let stripped_litellm = self.exact_or_normalized_litellm(stripped);
+            let stripped_litellm = self.exact_or_normalized_litellm(stripped, provider_id);
 
             if let (Some(litellm), Some(openrouter)) = (&stripped_litellm, &exact_openrouter) {
                 if has_meaningful_tier_support(&litellm.pricing)
@@ -238,35 +257,41 @@ impl PricingLookup {
         }
 
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.exact_match_litellm(&version_normalized) {
+            if let Some(result) =
+                self.exact_match_litellm_with_provider(&version_normalized, provider_id)
+            {
                 return Some(result);
             }
-            if let Some(result) = self.exact_match_openrouter(&version_normalized) {
+            if let Some(result) =
+                self.exact_match_openrouter_with_provider(&version_normalized, provider_id)
+            {
                 return Some(result);
             }
         }
 
         if let Some(normalized) = normalize_model_name(model_id) {
-            if let Some(result) = self.exact_match_litellm(&normalized) {
+            if let Some(result) = self.exact_match_litellm_with_provider(&normalized, provider_id) {
                 return Some(result);
             }
-            if let Some(result) = self.exact_match_openrouter(&normalized) {
+            if let Some(result) =
+                self.exact_match_openrouter_with_provider(&normalized, provider_id)
+            {
                 return Some(result);
             }
         }
 
-        if let Some(result) = self.prefix_match_litellm(model_id) {
+        if let Some(result) = self.prefix_match_litellm(model_id, provider_id) {
             return Some(result);
         }
-        if let Some(result) = self.prefix_match_openrouter(model_id) {
+        if let Some(result) = self.prefix_match_openrouter(model_id, provider_id) {
             return Some(result);
         }
 
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.prefix_match_litellm(&version_normalized) {
+            if let Some(result) = self.prefix_match_litellm(&version_normalized, provider_id) {
                 return Some(result);
             }
-            if let Some(result) = self.prefix_match_openrouter(&version_normalized) {
+            if let Some(result) = self.prefix_match_openrouter(&version_normalized, provider_id) {
                 return Some(result);
             }
         }
@@ -284,8 +309,8 @@ impl PricingLookup {
             return None;
         }
 
-        let litellm_result = self.fuzzy_match_litellm(model_id);
-        let openrouter_result = self.fuzzy_match_openrouter(model_id);
+        let litellm_result = self.fuzzy_match_litellm(model_id, provider_id);
+        let openrouter_result = self.fuzzy_match_openrouter(model_id, provider_id);
 
         match (&litellm_result, &openrouter_result) {
             (Some(l), Some(o)) => {
@@ -314,76 +339,124 @@ impl PricingLookup {
         }
     }
 
-    fn exact_or_normalized_litellm(&self, model_id: &str) -> Option<LookupResult> {
-        if let Some(result) = self.exact_match_litellm(model_id) {
+    fn exact_or_normalized_litellm(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        if let Some(result) = self.exact_match_litellm_with_provider(model_id, provider_id) {
             return Some(result);
         }
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.exact_match_litellm(&version_normalized) {
+            if let Some(result) =
+                self.exact_match_litellm_with_provider(&version_normalized, provider_id)
+            {
                 return Some(result);
             }
         }
         if let Some(normalized) = normalize_model_name(model_id) {
-            if let Some(result) = self.exact_match_litellm(&normalized) {
+            if let Some(result) = self.exact_match_litellm_with_provider(&normalized, provider_id) {
                 return Some(result);
             }
         }
         None
     }
 
-    fn lookup_litellm_only(&self, model_id: &str) -> Option<LookupResult> {
-        if let Some(result) = self.exact_or_normalized_litellm(model_id) {
+    fn lookup_litellm_only(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        if let Some(result) = self.exact_or_normalized_litellm(model_id, provider_id) {
             return Some(result);
         }
         if let Some(stripped) = strip_known_provider_prefix(model_id) {
-            if let Some(result) = self.exact_or_normalized_litellm(stripped) {
+            if let Some(result) = self.exact_or_normalized_litellm(stripped, provider_id) {
                 return Some(result);
             }
         }
-        if let Some(result) = self.prefix_match_litellm(model_id) {
+        if let Some(result) = self.prefix_match_litellm(model_id, provider_id) {
             return Some(result);
         }
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.prefix_match_litellm(&version_normalized) {
+            if let Some(result) = self.prefix_match_litellm(&version_normalized, provider_id) {
                 return Some(result);
             }
         }
         if is_fuzzy_eligible(model_id) {
-            if let Some(result) = self.fuzzy_match_litellm(model_id) {
+            if let Some(result) = self.fuzzy_match_litellm(model_id, provider_id) {
                 return Some(result);
             }
         }
         None
     }
 
-    fn lookup_openrouter_only(&self, model_id: &str) -> Option<LookupResult> {
-        if let Some(result) = self.exact_match_openrouter(model_id) {
+    fn lookup_openrouter_only(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        if let Some(result) = self.exact_match_openrouter_with_provider(model_id, provider_id) {
             return Some(result);
         }
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.exact_match_openrouter(&version_normalized) {
+            if let Some(result) =
+                self.exact_match_openrouter_with_provider(&version_normalized, provider_id)
+            {
                 return Some(result);
             }
         }
         if let Some(normalized) = normalize_model_name(model_id) {
-            if let Some(result) = self.exact_match_openrouter(&normalized) {
+            if let Some(result) =
+                self.exact_match_openrouter_with_provider(&normalized, provider_id)
+            {
                 return Some(result);
             }
         }
-        if let Some(result) = self.prefix_match_openrouter(model_id) {
+        if let Some(result) = self.prefix_match_openrouter(model_id, provider_id) {
             return Some(result);
         }
         if let Some(version_normalized) = normalize_version_separator(model_id) {
-            if let Some(result) = self.prefix_match_openrouter(&version_normalized) {
+            if let Some(result) = self.prefix_match_openrouter(&version_normalized, provider_id) {
                 return Some(result);
             }
         }
         if is_fuzzy_eligible(model_id) {
-            if let Some(result) = self.fuzzy_match_openrouter(model_id) {
+            if let Some(result) = self.fuzzy_match_openrouter(model_id, provider_id) {
                 return Some(result);
             }
         }
         None
+    }
+
+    fn exact_match_litellm_with_provider(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        exact_match_with_provider_prefixes(
+            model_id,
+            provider_id,
+            &self.litellm_lower,
+            &self.litellm,
+            "LiteLLM",
+        )
+        .or_else(|| self.exact_match_litellm(model_id))
+    }
+
+    fn exact_match_openrouter_with_provider(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        exact_match_with_provider_prefixes(
+            model_id,
+            provider_id,
+            &self.openrouter_lower,
+            &self.openrouter,
+            "OpenRouter",
+        )
+        .or_else(|| self.exact_match_openrouter(model_id))
     }
 
     fn exact_match_litellm(&self, model_id: &str) -> Option<LookupResult> {
@@ -440,7 +513,21 @@ impl PricingLookup {
         None
     }
 
-    fn prefix_match_litellm(&self, model_id: &str) -> Option<LookupResult> {
+    fn prefix_match_litellm(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        if let Some(result) = exact_match_with_provider_prefixes(
+            model_id,
+            provider_id,
+            &self.litellm_lower,
+            &self.litellm,
+            "LiteLLM",
+        ) {
+            return Some(result);
+        }
+
         for prefix in PROVIDER_PREFIXES {
             let key = format!("{}{}", prefix, model_id);
             if let Some(litellm_key) = self.litellm_lower.get(&key) {
@@ -456,7 +543,21 @@ impl PricingLookup {
         None
     }
 
-    fn prefix_match_openrouter(&self, model_id: &str) -> Option<LookupResult> {
+    fn prefix_match_openrouter(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
+        if let Some(result) = exact_match_with_provider_prefixes(
+            model_id,
+            provider_id,
+            &self.openrouter_lower,
+            &self.openrouter,
+            "OpenRouter",
+        ) {
+            return Some(result);
+        }
+
         for prefix in PROVIDER_PREFIXES {
             let key = format!("{}{}", prefix, model_id);
             if let Some(or_key) = self.openrouter_lower.get(&key) {
@@ -472,7 +573,11 @@ impl PricingLookup {
         None
     }
 
-    fn fuzzy_match_litellm(&self, model_id: &str) -> Option<LookupResult> {
+    fn fuzzy_match_litellm(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
         let family = extract_model_family(model_id);
         let mut family_matches_list: Vec<&String> = Vec::new();
 
@@ -483,7 +588,9 @@ impl PricingLookup {
             }
         }
 
-        if let Some(result) = select_best_match(&family_matches_list, &self.litellm, "LiteLLM") {
+        if let Some(result) =
+            select_best_match(&family_matches_list, &self.litellm, "LiteLLM", provider_id)
+        {
             return Some(result);
         }
 
@@ -495,10 +602,14 @@ impl PricingLookup {
             }
         }
 
-        select_best_match(&all_matches, &self.litellm, "LiteLLM")
+        select_best_match(&all_matches, &self.litellm, "LiteLLM", provider_id)
     }
 
-    fn fuzzy_match_openrouter(&self, model_id: &str) -> Option<LookupResult> {
+    fn fuzzy_match_openrouter(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+    ) -> Option<LookupResult> {
         let family = extract_model_family(model_id);
         let mut family_matches_list: Vec<&String> = Vec::new();
 
@@ -510,9 +621,12 @@ impl PricingLookup {
             }
         }
 
-        if let Some(result) =
-            select_best_match(&family_matches_list, &self.openrouter, "OpenRouter")
-        {
+        if let Some(result) = select_best_match(
+            &family_matches_list,
+            &self.openrouter,
+            "OpenRouter",
+            provider_id,
+        ) {
             return Some(result);
         }
 
@@ -525,7 +639,7 @@ impl PricingLookup {
             }
         }
 
-        select_best_match(&all_matches, &self.openrouter, "OpenRouter")
+        select_best_match(&all_matches, &self.openrouter, "OpenRouter", provider_id)
     }
 
     pub fn calculate_cost(
@@ -537,18 +651,34 @@ impl PricingLookup {
         cache_write: i64,
         reasoning: i64,
     ) -> f64 {
-        let result = match self.lookup(model_id) {
+        let usage = TokenBreakdown {
+            input,
+            output,
+            cache_read,
+            cache_write,
+            reasoning,
+        };
+        self.calculate_cost_with_provider(model_id, None, &usage)
+    }
+
+    pub fn calculate_cost_with_provider(
+        &self,
+        model_id: &str,
+        provider_id: Option<&str>,
+        usage: &TokenBreakdown,
+    ) -> f64 {
+        let result = match self.lookup_with_provider(model_id, provider_id) {
             Some(r) => r,
             None => return 0.0,
         };
 
         compute_cost(
             &result.pricing,
-            input,
-            output,
-            cache_read,
-            cache_write,
-            reasoning,
+            usage.input,
+            usage.output,
+            usage.cache_read,
+            usage.cache_write,
+            usage.reasoning,
         )
     }
 }
@@ -924,9 +1054,23 @@ fn select_best_match(
     matches: &[&String],
     dataset: &HashMap<String, ModelPricing>,
     source: &str,
+    provider_id: Option<&str>,
 ) -> Option<LookupResult> {
     if matches.is_empty() {
         return None;
+    }
+
+    if let Some(key) = matches
+        .iter()
+        .find(|key| matches_provider_hint(key, provider_id))
+    {
+        if let Some(pricing) = dataset.get(*key) {
+            return Some(LookupResult {
+                pricing: pricing.clone(),
+                source: source.into(),
+                matched_key: (*key).clone(),
+            });
+        }
     }
 
     if let Some(key) = matches.iter().find(|k| is_original_provider(k)) {
@@ -955,6 +1099,120 @@ fn select_best_match(
         source: source.into(),
         matched_key: key.clone(),
     })
+}
+
+fn build_lookup_cache_key(model_id: &str, provider_id: Option<&str>) -> String {
+    match provider_id {
+        Some(provider) if !provider.trim().is_empty() => {
+            format!("{}|{}", provider.to_lowercase(), model_id.to_lowercase())
+        }
+        _ => model_id.to_lowercase(),
+    }
+}
+
+fn canonical_provider_tag(provider: &str) -> String {
+    let lower = provider
+        .trim()
+        .trim_end_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or(provider)
+        .to_lowercase()
+        .replace('-', "_");
+
+    match lower.as_str() {
+        "x_ai" => "xai".into(),
+        "z_ai" => "zai".into(),
+        "moonshot" => "moonshotai".into(),
+        "meta" => "meta_llama".into(),
+        "azure" => "azure_ai".into(),
+        "vertex" => "vertex_ai".into(),
+        "together" => "together_ai".into(),
+        "fireworks" => "fireworks_ai".into(),
+        other => other.into(),
+    }
+}
+
+fn provider_prefix_variants(provider_id: Option<&str>) -> Vec<String> {
+    let Some(provider_id) = provider_id else {
+        return Vec::new();
+    };
+
+    let normalized = canonical_provider_tag(provider_id);
+    if normalized.is_empty() || normalized == "unknown" {
+        return Vec::new();
+    }
+
+    let mut prefixes = Vec::new();
+    let mut push = |prefix: &str| {
+        if !prefixes.iter().any(|existing| existing == prefix) {
+            prefixes.push(prefix.to_string());
+        }
+    };
+
+    match normalized.as_str() {
+        "xai" => {
+            push("xai/");
+            push("x-ai/");
+        }
+        "zai" => {
+            push("z-ai/");
+            push("zai/");
+        }
+        "moonshotai" => push("moonshotai/"),
+        "meta_llama" => push("meta-llama/"),
+        "azure_ai" => {
+            push("azure/");
+            push("azure_ai/");
+        }
+        "vertex_ai" => push("vertex_ai/"),
+        "together_ai" => {
+            push("together/");
+            push("together_ai/");
+        }
+        "fireworks_ai" => push("fireworks_ai/"),
+        other => push(&format!("{other}/")),
+    }
+
+    prefixes
+}
+
+fn matches_provider_hint(key: &str, provider_id: Option<&str>) -> bool {
+    let Some(provider_id) = provider_id else {
+        return false;
+    };
+    let Some(prefix) = key.split('/').next() else {
+        return false;
+    };
+
+    if prefix == key {
+        return false;
+    }
+
+    canonical_provider_tag(prefix) == canonical_provider_tag(provider_id)
+}
+
+fn exact_match_with_provider_prefixes(
+    model_id: &str,
+    provider_id: Option<&str>,
+    lower_map: &HashMap<String, String>,
+    dataset: &HashMap<String, ModelPricing>,
+    source: &str,
+) -> Option<LookupResult> {
+    for prefix in provider_prefix_variants(provider_id) {
+        let candidate = format!("{}{}", prefix, model_id);
+        if let Some(key) = lower_map.get(&candidate) {
+            if let Some(pricing) = dataset.get(key) {
+                return Some(LookupResult {
+                    pricing: pricing.clone(),
+                    source: source.into(),
+                    matched_key: key.clone(),
+                });
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -1574,6 +1832,16 @@ mod tests {
         assert_eq!(result.source, "LiteLLM");
     }
 
+    #[test]
+    fn test_provider_hint_prefers_matching_pricing_source() {
+        let lookup = create_lookup();
+        let result = lookup
+            .lookup_with_provider("grok-code", Some("azure"))
+            .unwrap();
+        assert_eq!(result.matched_key, "azure_ai/grok-code-fast-1");
+        assert_eq!(result.source, "LiteLLM");
+    }
+
     // =========================================================================
     // BASELINE / LEGACY TESTS
     // =========================================================================
@@ -1647,6 +1915,22 @@ mod tests {
         let lookup = create_lookup();
         let result = lookup.lookup("opus-4-5").unwrap();
         assert_eq!(result.matched_key, "claude-opus-4-5");
+        assert_eq!(result.source, "LiteLLM");
+    }
+
+    #[test]
+    fn test_free_variant_normalizes_to_market_priced_claude_model() {
+        let lookup = create_lookup();
+        let result = lookup.lookup("claude-sonnet-4-5-free").unwrap();
+        assert_eq!(result.matched_key, "claude-sonnet-4-5");
+        assert_eq!(result.source, "LiteLLM");
+    }
+
+    #[test]
+    fn test_free_variant_with_extra_suffix_falls_back_to_market_priced_model() {
+        let lookup = create_lookup();
+        let result = lookup.lookup("claude-sonnet-4-5-free-high").unwrap();
+        assert_eq!(result.matched_key, "claude-sonnet-4-5");
         assert_eq!(result.source, "LiteLLM");
     }
 
