@@ -2973,15 +2973,15 @@ fn run_submit_command(
         .contributions
         .retain(|c| c.date.as_str() <= utc_today.as_str());
     if graph_result.contributions.len() < pre_cap_len {
-        // Recalculate date_range_end and summary after capping
-        if let Some(last) = graph_result.contributions.last() {
-            graph_result.meta.date_range_end = last.date.clone();
-        }
-        graph_result.summary.active_days = graph_result
+        graph_result.meta.date_range_end = graph_result
             .contributions
-            .iter()
-            .filter(|c| c.totals.tokens > 0)
-            .count() as i32;
+            .last()
+            .map(|c| c.date.clone())
+            .unwrap_or_default();
+        graph_result.summary =
+            tokscale_core::calculate_summary(&graph_result.contributions);
+        graph_result.years =
+            tokscale_core::calculate_years(&graph_result.contributions);
     }
 
     println!("{}", "  Data to submit:".white());
