@@ -2978,10 +2978,8 @@ fn run_submit_command(
             .last()
             .map(|c| c.date.clone())
             .unwrap_or_default();
-        graph_result.summary =
-            tokscale_core::calculate_summary(&graph_result.contributions);
-        graph_result.years =
-            tokscale_core::calculate_years(&graph_result.contributions);
+        graph_result.summary = tokscale_core::calculate_summary(&graph_result.contributions);
+        graph_result.years = tokscale_core::calculate_years(&graph_result.contributions);
     }
 
     println!("{}", "  Data to submit:".white());
