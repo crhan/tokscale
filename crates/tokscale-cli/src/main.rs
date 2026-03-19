@@ -2973,6 +2973,11 @@ fn run_submit_command(
         .contributions
         .retain(|c| c.date.as_str() <= utc_today.as_str());
     if graph_result.contributions.len() < pre_cap_len {
+        graph_result.meta.date_range_start = graph_result
+            .contributions
+            .first()
+            .map(|c| c.date.clone())
+            .unwrap_or_default();
         graph_result.meta.date_range_end = graph_result
             .contributions
             .last()
