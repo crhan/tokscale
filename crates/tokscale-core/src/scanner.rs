@@ -147,20 +147,21 @@ pub fn scan_directory(root: &str, pattern: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Parse the TOKSCALE_EXTRA_DIRS environment variable.
+/// Parse a `TOKSCALE_EXTRA_DIRS`-formatted string into (ClientId, path) pairs.
 ///
 /// Format: comma-separated `client:path` pairs.
-/// Example: `claude:/path/to/mac/sessions,openclaw:/other/path`
+/// Example: `"claude:/path/to/mac/sessions,openclaw:/other/path"`
 ///
-/// Returns a list of (ClientId, path) pairs for clients that are in the
-/// enabled set.
-fn parse_extra_dirs(enabled: &HashSet<ClientId>) -> Vec<(ClientId, String)> {
-    let val = match std::env::var("TOKSCALE_EXTRA_DIRS") {
-        Ok(v) if !v.is_empty() => v,
-        _ => return Vec::new(),
-    };
+/// Only returns entries whose client is present in `enabled`.
+/// This is a pure function — the caller is responsible for reading the
+/// environment variable and passing its value here.
+pub fn parse_extra_dirs(value: &str, enabled: &HashSet<ClientId>) -> Vec<(ClientId, String)> {
+    if value.is_empty() {
+        return Vec::new();
+    }
 
-    val.split(',')
+    value
+        .split(',')
         .filter_map(|entry| {
             let entry = entry.trim();
             let (client_str, path) = entry.split_once(':')?;
@@ -216,7 +217,8 @@ pub fn scan_all_clients(home_dir: &str, clients: &[String]) -> ScanResult {
     }
 
     // Extra scan directories from TOKSCALE_EXTRA_DIRS env var
-    for (client_id, path) in parse_extra_dirs(&enabled) {
+    let extra_dirs_val = std::env::var("TOKSCALE_EXTRA_DIRS").unwrap_or_default();
+    for (client_id, path) in parse_extra_dirs(&extra_dirs_val, &enabled) {
         let pattern = client_id.data().pattern;
         tasks.push((client_id, path, pattern));
     }
@@ -352,9 +354,14 @@ pub fn scan_all_clients(home_dir: &str, clients: &[String]) -> ScanResult {
         })
         .collect();
 
-    // Aggregate results
+    // Aggregate results, deduplicating file paths across overlapping directories
+    let mut seen: HashSet<PathBuf> = HashSet::new();
     for (client_id, files) in scan_results {
-        result.get_mut(client_id).extend(files);
+        for file in files {
+            if seen.insert(file.clone()) {
+                result.get_mut(client_id).push(file);
+            }
+        }
     }
 
     result
@@ -891,73 +898,43 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn test_parse_extra_dirs_basic() {
-        let previous = std::env::var("TOKSCALE_EXTRA_DIRS").ok();
-        unsafe {
-            std::env::set_var(
-                "TOKSCALE_EXTRA_DIRS",
-                "claude:/tmp/mac-sessions,openclaw:/tmp/oc-extra",
-            )
-        };
-
         let enabled: HashSet<ClientId> = [ClientId::Claude, ClientId::OpenClaw]
             .iter()
             .copied()
             .collect();
-        let dirs = parse_extra_dirs(&enabled);
+        let dirs =
+            parse_extra_dirs("claude:/tmp/mac-sessions,openclaw:/tmp/oc-extra", &enabled);
         assert_eq!(dirs.len(), 2);
         assert_eq!(dirs[0].0, ClientId::Claude);
         assert_eq!(dirs[0].1, "/tmp/mac-sessions");
         assert_eq!(dirs[1].0, ClientId::OpenClaw);
         assert_eq!(dirs[1].1, "/tmp/oc-extra");
-
-        restore_env("TOKSCALE_EXTRA_DIRS", previous);
     }
 
     #[test]
-    #[serial]
     fn test_parse_extra_dirs_filters_disabled_clients() {
-        let previous = std::env::var("TOKSCALE_EXTRA_DIRS").ok();
-        unsafe {
-            std::env::set_var(
-                "TOKSCALE_EXTRA_DIRS",
-                "claude:/tmp/mac-sessions,gemini:/tmp/gemini-extra",
-            )
-        };
-
         let enabled: HashSet<ClientId> = [ClientId::Claude].iter().copied().collect();
-        let dirs = parse_extra_dirs(&enabled);
+        let dirs = parse_extra_dirs(
+            "claude:/tmp/mac-sessions,gemini:/tmp/gemini-extra",
+            &enabled,
+        );
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].0, ClientId::Claude);
-
-        restore_env("TOKSCALE_EXTRA_DIRS", previous);
     }
 
     #[test]
-    #[serial]
-    fn test_parse_extra_dirs_empty_env() {
-        let previous = std::env::var("TOKSCALE_EXTRA_DIRS").ok();
-        unsafe { std::env::remove_var("TOKSCALE_EXTRA_DIRS") };
-
+    fn test_parse_extra_dirs_empty_string() {
         let enabled: HashSet<ClientId> = ClientId::iter().collect();
-        let dirs = parse_extra_dirs(&enabled);
+        let dirs = parse_extra_dirs("", &enabled);
         assert!(dirs.is_empty());
-
-        restore_env("TOKSCALE_EXTRA_DIRS", previous);
     }
 
     #[test]
-    #[serial]
     fn test_parse_extra_dirs_invalid_client() {
-        let previous = std::env::var("TOKSCALE_EXTRA_DIRS").ok();
-        unsafe { std::env::set_var("TOKSCALE_EXTRA_DIRS", "nonexistent:/tmp/foo") };
-
         let enabled: HashSet<ClientId> = ClientId::iter().collect();
-        let dirs = parse_extra_dirs(&enabled);
+        let dirs = parse_extra_dirs("nonexistent:/tmp/foo", &enabled);
         assert!(dirs.is_empty());
-
-        restore_env("TOKSCALE_EXTRA_DIRS", previous);
     }
 
     #[test]

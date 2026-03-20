@@ -2235,17 +2235,11 @@ fn run_clients_command(json: bool) -> Result<()> {
         exists: bool,
     }
 
-    // Collect extra dirs from TOKSCALE_EXTRA_DIRS for display
-    let extra_dirs: Vec<(String, String)> = std::env::var("TOKSCALE_EXTRA_DIRS")
-        .unwrap_or_default()
-        .split(',')
-        .filter_map(|entry| {
-            let entry = entry.trim();
-            let (client_str, path) = entry.split_once(':')?;
-            Some((client_str.trim().to_string(), path.trim().to_string()))
-        })
-        .filter(|(_, path)| !path.is_empty())
-        .collect();
+    // Collect extra dirs from TOKSCALE_EXTRA_DIRS for display (reuse core parser)
+    let extra_dirs_val = std::env::var("TOKSCALE_EXTRA_DIRS").unwrap_or_default();
+    let all_clients: std::collections::HashSet<ClientId> = ClientId::iter().collect();
+    let extra_dirs: Vec<(ClientId, String)> =
+        tokscale_core::parse_extra_dirs(&extra_dirs_val, &all_clients);
 
     let clients: Vec<ClientRow> = ClientId::iter()
         .map(|client| {
@@ -2310,7 +2304,7 @@ fn run_clients_command(json: bool) -> Result<()> {
 
             let extra_paths: Vec<ExtraPath> = extra_dirs
                 .iter()
-                .filter(|(c, _)| c == client.as_str())
+                .filter(|(c, _)| *c == client)
                 .map(|(_, path)| ExtraPath {
                     path: path.clone(),
                     exists: Path::new(path).exists(),
