@@ -2210,6 +2210,8 @@ fn run_clients_command(json: bool) -> Result<()> {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         headless_paths: Vec<HeadlessPath>,
         headless_message_count: i32,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        extra_paths: Vec<ExtraPath>,
     }
 
     #[derive(serde::Serialize)]
@@ -2225,6 +2227,25 @@ fn run_clients_command(json: bool) -> Result<()> {
         path: String,
         exists: bool,
     }
+
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ExtraPath {
+        path: String,
+        exists: bool,
+    }
+
+    // Collect extra dirs from TOKSCALE_EXTRA_DIRS for display
+    let extra_dirs: Vec<(String, String)> = std::env::var("TOKSCALE_EXTRA_DIRS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            let (client_str, path) = entry.split_once(':')?;
+            Some((client_str.trim().to_string(), path.trim().to_string()))
+        })
+        .filter(|(_, path)| !path.is_empty())
+        .collect();
 
     let clients: Vec<ClientRow> = ClientId::iter()
         .map(|client| {
@@ -2287,6 +2308,15 @@ fn run_clients_command(json: bool) -> Result<()> {
             }
             .to_string();
 
+            let extra_paths: Vec<ExtraPath> = extra_dirs
+                .iter()
+                .filter(|(c, _)| c == client.as_str())
+                .map(|(_, path)| ExtraPath {
+                    path: path.clone(),
+                    exists: Path::new(path).exists(),
+                })
+                .collect();
+
             ClientRow {
                 client: client.as_str().to_string(),
                 label,
@@ -2297,6 +2327,7 @@ fn run_clients_command(json: bool) -> Result<()> {
                 headless_supported,
                 headless_paths,
                 headless_message_count,
+                extra_paths,
             }
         })
         .collect();
@@ -2358,6 +2389,18 @@ fn run_clients_command(json: bool) -> Result<()> {
                 println!(
                     "  {}",
                     format!("legacy: {}", legacy_desc.join(", ")).bright_black()
+                );
+            }
+
+            if !row.extra_paths.is_empty() {
+                let extra_desc: Vec<String> = row
+                    .extra_paths
+                    .iter()
+                    .map(|ep| describe_path(&ep.path, ep.exists))
+                    .collect();
+                println!(
+                    "  {}",
+                    format!("extra: {}", extra_desc.join(", ")).bright_black()
                 );
             }
 
