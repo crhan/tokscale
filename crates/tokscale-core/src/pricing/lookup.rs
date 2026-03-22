@@ -958,18 +958,23 @@ fn is_valid_price_value(value: f64) -> bool {
     value.is_finite() && value >= 0.0
 }
 
-/// Returns true if the pricing entry has at least one non-None base cost field.
-/// Entries with all-None pricing (e.g. subscription-based providers like Perplexity)
-/// are useless for pay-per-token cost estimation and should be deprioritized.
-fn has_any_base_pricing(pricing: &ModelPricing) -> bool {
+/// Returns true if the pricing entry has at least one usable cost field
+/// (base or above-200k tier). Entries with all-None pricing (e.g.
+/// subscription-based providers like Perplexity) are useless for
+/// pay-per-token cost estimation and should be deprioritized.
+fn has_any_usable_pricing(pricing: &ModelPricing) -> bool {
     [
         pricing.input_cost_per_token,
         pricing.output_cost_per_token,
         pricing.cache_read_input_token_cost,
         pricing.cache_creation_input_token_cost,
+        pricing.input_cost_per_token_above_200k_tokens,
+        pricing.output_cost_per_token_above_200k_tokens,
+        pricing.cache_read_input_token_cost_above_200k_tokens,
+        pricing.cache_creation_input_token_cost_above_200k_tokens,
     ]
     .into_iter()
-    .any(|opt| opt.is_some_and(|v| v.is_finite()))
+    .any(|opt| opt.is_some_and(is_valid_price_value))
 }
 
 fn has_any_valid_above_tier_value(pricing: &ModelPricing) -> bool {
@@ -1141,7 +1146,7 @@ fn select_best_match(
     let with_pricing: Vec<&String> = preferred_matches
         .iter()
         .copied()
-        .filter(|k| dataset.get(k.as_str()).is_some_and(|p| has_any_base_pricing(p)))
+        .filter(|k| dataset.get(k.as_str()).is_some_and(|p| has_any_usable_pricing(p)))
         .collect();
     if with_pricing.is_empty() {
         return None;
