@@ -2150,7 +2150,7 @@ fn run_hourly_report(
                 Cell::new("Output").fg(Color::Cyan),
                 Cell::new("Cache R").fg(Color::Cyan),
                 Cell::new("Cache W").fg(Color::Cyan),
-                Cell::new("Cache%").fg(Color::Cyan),
+                Cell::new("Cache×").fg(Color::Cyan),
                 Cell::new("Cost").fg(Color::Cyan),
             ]);
 

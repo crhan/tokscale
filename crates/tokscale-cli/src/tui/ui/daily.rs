@@ -55,7 +55,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             "Output",
             "Cache R",
             "Cache W",
-            "Cache%",
+            "Cache×",
             "Total",
             "Cost",
         ]

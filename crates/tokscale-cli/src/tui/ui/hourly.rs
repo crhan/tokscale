@@ -54,7 +54,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         vec!["Hour", "Source", "Tokens", "Cost"]
     } else {
         vec![
-            "Hour", "Source", "Input", "Output", "Cache R", "Cache W", "Cache%", "Total", "Cost",
+            "Hour", "Source", "Input", "Output", "Cache R", "Cache W", "Cache×", "Total", "Cost",
         ]
     };
 
