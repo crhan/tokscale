@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokscale_core::ClientId;
 
-use super::data::{AgentUsage, DailyUsage, DataLoader, ModelUsage, UsageData};
+use super::data::{AgentUsage, DailyUsage, DataLoader, HourlyUsage, ModelUsage, UsageData};
 use super::settings::Settings;
 use super::themes::{Theme, ThemeName};
 use super::ui::dialog::{ClientPickerDialog, DialogStack};
@@ -30,6 +30,7 @@ pub enum Tab {
     Overview,
     Models,
     Daily,
+    Hourly,
     Stats,
     Agents,
 }
@@ -40,6 +41,7 @@ impl Tab {
             Tab::Overview,
             Tab::Models,
             Tab::Daily,
+            Tab::Hourly,
             Tab::Stats,
             Tab::Agents,
         ]
@@ -50,6 +52,7 @@ impl Tab {
             Tab::Overview => "Overview",
             Tab::Models => "Models",
             Tab::Daily => "Daily",
+            Tab::Hourly => "Hourly",
             Tab::Stats => "Stats",
             Tab::Agents => "Agents",
         }
@@ -60,6 +63,7 @@ impl Tab {
             Tab::Overview => "Ovw",
             Tab::Models => "Mod",
             Tab::Daily => "Day",
+            Tab::Hourly => "Hr",
             Tab::Stats => "Sta",
             Tab::Agents => "Agt",
         }
@@ -69,7 +73,8 @@ impl Tab {
         match self {
             Tab::Overview => Tab::Models,
             Tab::Models => Tab::Daily,
-            Tab::Daily => Tab::Stats,
+            Tab::Daily => Tab::Hourly,
+            Tab::Hourly => Tab::Stats,
             Tab::Stats => Tab::Agents,
             Tab::Agents => Tab::Overview,
         }
@@ -80,10 +85,18 @@ impl Tab {
             Tab::Overview => Tab::Agents,
             Tab::Models => Tab::Overview,
             Tab::Daily => Tab::Models,
-            Tab::Stats => Tab::Daily,
+            Tab::Hourly => Tab::Daily,
+            Tab::Stats => Tab::Hourly,
             Tab::Agents => Tab::Stats,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChartGranularity {
+    #[default]
+    Daily,
+    Hourly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +137,7 @@ pub struct App {
     pub group_by: Rc<RefCell<tokscale_core::GroupBy>>,
     pub sort_field: SortField,
     pub sort_direction: SortDirection,
+    pub chart_granularity: ChartGranularity,
 
     pub scroll_offset: usize,
     pub selected_index: usize,
@@ -215,6 +229,7 @@ impl App {
             group_by: Rc::new(RefCell::new(tokscale_core::GroupBy::Model)),
             sort_field: SortField::Cost,
             sort_direction: SortDirection::Descending,
+            chart_granularity: ChartGranularity::default(),
             scroll_offset: 0,
             selected_index: 0,
             max_visible_items: 20,
@@ -376,6 +391,14 @@ impl App {
             }
             KeyCode::Char('s') => {
                 self.open_client_picker();
+            }
+            KeyCode::Char('h') => {
+                if self.current_tab == Tab::Overview {
+                    self.chart_granularity = match self.chart_granularity {
+                        ChartGranularity::Daily => ChartGranularity::Hourly,
+                        ChartGranularity::Hourly => ChartGranularity::Daily,
+                    };
+                }
             }
             KeyCode::Char('g') => {
                 self.open_group_by_picker();
@@ -597,6 +620,7 @@ impl App {
             Tab::Overview | Tab::Models => self.data.models.len(),
             Tab::Agents => self.data.agents.len(),
             Tab::Daily => self.data.daily.len(),
+            Tab::Hourly => self.data.hourly.len(),
             Tab::Stats => {
                 if self.selected_graph_cell.is_some() {
                     self.stats_breakdown_total_lines
@@ -750,6 +774,17 @@ impl App {
                 .get_sorted_daily()
                 .get(self.selected_index)
                 .map(|d| format!("{}: {} tokens, ${:.4}", d.date, d.tokens.total(), d.cost)),
+            Tab::Hourly => self
+                .get_sorted_hourly()
+                .get(self.selected_index)
+                .map(|h| {
+                    format!(
+                        "{}: {} tokens, ${:.4}",
+                        h.datetime.format("%Y-%m-%d %H:%M"),
+                        h.tokens.total(),
+                        h.cost
+                    )
+                }),
             Tab::Stats => None,
         };
 
@@ -936,6 +971,43 @@ impl App {
         }
 
         daily
+    }
+
+    pub fn get_sorted_hourly(&self) -> Vec<&HourlyUsage> {
+        let mut hourly: Vec<&HourlyUsage> = self.data.hourly.iter().collect();
+
+        match (self.sort_field, self.sort_direction) {
+            (SortField::Cost, SortDirection::Descending) => hourly.sort_by(|a, b| {
+                b.cost
+                    .total_cmp(&a.cost)
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Cost, SortDirection::Ascending) => hourly.sort_by(|a, b| {
+                a.cost
+                    .total_cmp(&b.cost)
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Tokens, SortDirection::Descending) => hourly.sort_by(|a, b| {
+                b.tokens
+                    .total()
+                    .cmp(&a.tokens.total())
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Tokens, SortDirection::Ascending) => hourly.sort_by(|a, b| {
+                a.tokens
+                    .total()
+                    .cmp(&b.tokens.total())
+                    .then_with(|| a.datetime.cmp(&b.datetime))
+            }),
+            (SortField::Date, SortDirection::Descending) => {
+                hourly.sort_by(|a, b| b.datetime.cmp(&a.datetime))
+            }
+            (SortField::Date, SortDirection::Ascending) => {
+                hourly.sort_by(|a, b| a.datetime.cmp(&b.datetime))
+            }
+        }
+
+        hourly
     }
 
     pub fn is_narrow(&self) -> bool {

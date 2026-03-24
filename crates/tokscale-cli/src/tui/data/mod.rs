@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, Timelike};
 use tokio::runtime::{Handle, Runtime};
 
 use tokscale_core::sessions::UnifiedMessage;
@@ -65,6 +65,22 @@ pub struct DailyUsage {
 }
 
 #[derive(Debug, Clone)]
+pub struct HourlyModelInfo {
+    pub client: String,
+    pub tokens: TokenBreakdown,
+    pub cost: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct HourlyUsage {
+    pub datetime: NaiveDateTime,
+    pub tokens: TokenBreakdown,
+    pub cost: f64,
+    pub clients: BTreeSet<String>,
+    pub models: BTreeMap<String, HourlyModelInfo>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ContributionDay {
     pub date: NaiveDate,
     pub tokens: u64,
@@ -82,6 +98,7 @@ pub struct UsageData {
     pub models: Vec<ModelUsage>,
     pub agents: Vec<AgentUsage>,
     pub daily: Vec<DailyUsage>,
+    pub hourly: Vec<HourlyUsage>,
     pub graph: Option<GraphData>,
     pub total_tokens: u64,
     pub total_cost: f64,
@@ -175,6 +192,7 @@ impl DataLoader {
         let mut agent_map: HashMap<String, AgentUsage> = HashMap::new();
         let mut agent_clients: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut daily_map: HashMap<NaiveDate, DailyUsage> = HashMap::new();
+        let mut hourly_map: HashMap<NaiveDateTime, HourlyUsage> = HashMap::new();
         let mut model_session_ids: HashMap<String, HashSet<String>> = HashMap::new();
 
         for msg in &messages {
@@ -360,6 +378,78 @@ impl DataLoader {
                 };
                 model_info.cost += model_msg_cost;
             }
+
+            // Hourly aggregation: derive hour from timestamp (Unix ms)
+            if let Some(hour_dt) = timestamp_to_hour(msg.timestamp) {
+                let hourly_entry =
+                    hourly_map
+                        .entry(hour_dt)
+                        .or_insert_with(|| HourlyUsage {
+                            datetime: hour_dt,
+                            tokens: TokenBreakdown::default(),
+                            cost: 0.0,
+                            clients: BTreeSet::new(),
+                            models: BTreeMap::new(),
+                        });
+
+                hourly_entry.tokens.input = hourly_entry
+                    .tokens
+                    .input
+                    .saturating_add(msg.tokens.input.max(0) as u64);
+                hourly_entry.tokens.output = hourly_entry
+                    .tokens
+                    .output
+                    .saturating_add(msg.tokens.output.max(0) as u64);
+                hourly_entry.tokens.cache_read = hourly_entry
+                    .tokens
+                    .cache_read
+                    .saturating_add(msg.tokens.cache_read.max(0) as u64);
+                hourly_entry.tokens.cache_write = hourly_entry
+                    .tokens
+                    .cache_write
+                    .saturating_add(msg.tokens.cache_write.max(0) as u64);
+                hourly_entry.tokens.reasoning = hourly_entry
+                    .tokens
+                    .reasoning
+                    .saturating_add(msg.tokens.reasoning.max(0) as u64);
+                let h_cost = if msg.cost.is_finite() && msg.cost >= 0.0 {
+                    msg.cost
+                } else {
+                    0.0
+                };
+                hourly_entry.cost += h_cost;
+                hourly_entry.clients.insert(msg.client.clone());
+
+                let h_model = hourly_entry
+                    .models
+                    .entry(normalized_model.clone())
+                    .or_insert_with(|| HourlyModelInfo {
+                        client: msg.client.clone(),
+                        tokens: TokenBreakdown::default(),
+                        cost: 0.0,
+                    });
+                h_model.tokens.input = h_model
+                    .tokens
+                    .input
+                    .saturating_add(msg.tokens.input.max(0) as u64);
+                h_model.tokens.output = h_model
+                    .tokens
+                    .output
+                    .saturating_add(msg.tokens.output.max(0) as u64);
+                h_model.tokens.cache_read = h_model
+                    .tokens
+                    .cache_read
+                    .saturating_add(msg.tokens.cache_read.max(0) as u64);
+                h_model.tokens.cache_write = h_model
+                    .tokens
+                    .cache_write
+                    .saturating_add(msg.tokens.cache_write.max(0) as u64);
+                h_model.tokens.reasoning = h_model
+                    .tokens
+                    .reasoning
+                    .saturating_add(msg.tokens.reasoning.max(0) as u64);
+                h_model.cost += h_cost;
+            }
         }
 
         let mut models: Vec<ModelUsage> = model_map.into_values().collect();
@@ -388,6 +478,9 @@ impl DataLoader {
         let mut daily: Vec<DailyUsage> = daily_map.into_values().collect();
         daily.sort_by(|a, b| b.date.cmp(&a.date));
 
+        let mut hourly: Vec<HourlyUsage> = hourly_map.into_values().collect();
+        hourly.sort_by(|a, b| b.datetime.cmp(&a.datetime));
+
         let total_tokens: u64 = models.iter().map(|m| m.tokens.total()).sum();
         let total_cost: f64 = models
             .iter()
@@ -401,6 +494,7 @@ impl DataLoader {
             models,
             agents,
             daily,
+            hourly,
             graph: Some(graph),
             total_tokens,
             total_cost,
@@ -414,6 +508,27 @@ impl DataLoader {
 
 fn parse_date(date_str: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
+}
+
+/// Convert Unix ms timestamp to a NaiveDateTime truncated to the hour (local tz).
+fn timestamp_to_hour(timestamp_ms: i64) -> Option<NaiveDateTime> {
+    use chrono::TimeZone;
+    if timestamp_ms <= 0 {
+        return None;
+    }
+    let ts_secs = timestamp_ms / 1000;
+    match Local.timestamp_opt(ts_secs, 0) {
+        chrono::LocalResult::Single(dt) => {
+            let naive = dt.naive_local();
+            Some(
+                naive
+                    .date()
+                    .and_hms_opt(naive.hour(), 0, 0)
+                    .unwrap_or(naive),
+            )
+        }
+        _ => None,
+    }
 }
 
 fn build_contribution_graph(daily: &[DailyUsage]) -> GraphData {
