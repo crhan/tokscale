@@ -177,7 +177,7 @@ pub fn parse_extra_dirs(value: &str, enabled: &HashSet<ClientId>) -> Vec<(Client
             let entry = entry.trim();
             let (client_str, path) = entry.split_once(':')?;
             let client_id = ClientId::from_str(client_str.trim())?;
-            if !enabled.contains(&client_id) {
+            if !enabled.contains(&client_id) || !supports_extra_dir_scanning(client_id) {
                 return None;
             }
             let path = path.trim().to_string();
@@ -187,6 +187,13 @@ pub fn parse_extra_dirs(value: &str, enabled: &HashSet<ClientId>) -> Vec<(Client
             Some((client_id, path))
         })
         .collect()
+}
+
+fn supports_extra_dir_scanning(client_id: ClientId) -> bool {
+    // Kilo currently loads a single SQLite DB via `scan_result.kilo_db` rather than
+    // consuming scanned file lists, so accepting `kilo:` extra dirs would silently
+    // advertise unsupported behavior.
+    !matches!(client_id, ClientId::Kilo)
 }
 
 /// Scan all session client directories in parallel
@@ -960,6 +967,16 @@ mod tests {
         );
         assert_eq!(dirs.len(), 1);
         assert_eq!(dirs[0].0, ClientId::Claude);
+    }
+
+    #[test]
+    fn test_parse_extra_dirs_skips_unsupported_clients() {
+        let enabled: HashSet<ClientId> =
+            [ClientId::Claude, ClientId::Kilo].iter().copied().collect();
+        let dirs = parse_extra_dirs("claude:/tmp/mac-sessions,kilo:/tmp/kilo", &enabled);
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].0, ClientId::Claude);
+        assert_eq!(dirs[0].1, "/tmp/mac-sessions");
     }
 
     #[test]

@@ -1141,17 +1141,28 @@ fn select_best_match(
 
     // Deprioritize entries with all-None pricing (e.g. perplexity/anthropic/...
     // which matches provider hint "anthropic" but has subscription-based pricing
-    // with no per-token cost data). When no entry has usable pricing, return None
-    // so the caller falls through to non-provider-specific lookups.
-    let with_pricing: Vec<&String> = preferred_matches
+    // with no per-token cost data). If provider-specific candidates are all
+    // unusable, fall back to any priced candidate in the broader match set so
+    // fuzzy/provider-aware lookups can still resolve a valid non-provider key.
+    let preferred_with_pricing: Vec<&String> = preferred_matches
         .iter()
         .copied()
-        .filter(|k| dataset.get(k.as_str()).is_some_and(|p| has_any_usable_pricing(p)))
+        .filter(|k| dataset.get(k.as_str()).is_some_and(has_any_usable_pricing))
         .collect();
-    if with_pricing.is_empty() {
+    let effective_matches: Vec<&String> =
+        if preferred_with_pricing.is_empty() && !provider_matches.is_empty() {
+            matches
+                .iter()
+                .copied()
+                .filter(|k| dataset.get(k.as_str()).is_some_and(has_any_usable_pricing))
+                .collect()
+        } else {
+            preferred_with_pricing
+        };
+    if effective_matches.is_empty() {
         return None;
     }
-    let effective_matches = with_pricing.as_slice();
+    let effective_matches = effective_matches.as_slice();
 
     let hint_is_reseller = provider_id.is_some_and(is_reseller_provider);
     let pick = |candidates: &[&String], prefer_reseller: bool| -> Option<LookupResult> {
@@ -3026,6 +3037,32 @@ mod tests {
         // Cost should be non-zero
         let cost = lookup.calculate_cost("claude-opus-4-6", 100_000, 50_000, 0, 0, 0);
         assert!(cost > 0.0, "cost should be positive, got {}", cost);
+    }
+
+    #[test]
+    fn test_none_pricing_provider_match_falls_back_to_priced_fuzzy_candidate() {
+        let mut litellm = HashMap::new();
+        litellm.insert(
+            "claude-opus-4-6-20250301".into(),
+            ModelPricing {
+                input_cost_per_token: Some(0.000005),
+                output_cost_per_token: Some(0.000025),
+                ..Default::default()
+            },
+        );
+        litellm.insert(
+            "perplexity/anthropic/claude-opus-4-6-20250301".into(),
+            ModelPricing::default(),
+        );
+
+        let lookup = PricingLookup::new(litellm, HashMap::new(), HashMap::new());
+
+        let result = lookup.lookup_with_provider("claude-opus-4-6-latest", Some("anthropic"));
+        assert!(result.is_some(), "lookup should succeed via fuzzy fallback");
+        let result = result.unwrap();
+        assert_eq!(result.matched_key, "claude-opus-4-6-20250301");
+        assert_eq!(result.source, "LiteLLM");
+        assert!(result.pricing.input_cost_per_token.is_some());
     }
 
     #[test]
