@@ -2150,6 +2150,7 @@ fn run_hourly_report(
                 Cell::new("Output").fg(Color::Cyan),
                 Cell::new("Cache R").fg(Color::Cyan),
                 Cell::new("Cache W").fg(Color::Cyan),
+                Cell::new("Cache%").fg(Color::Cyan),
                 Cell::new("Cost").fg(Color::Cyan),
             ]);
 
@@ -2173,6 +2174,15 @@ fn run_hourly_report(
                     unique.join(", ")
                 };
 
+                let cache_hit = {
+                    let paid = (entry.input as u64).saturating_add(entry.cache_write as u64);
+                    if paid == 0 {
+                        if entry.cache_read > 0 { "∞".to_string() } else { "—".to_string() }
+                    } else {
+                        format!("{:.1}x", entry.cache_read as f64 / paid as f64)
+                    }
+                };
+
                 table.add_row(vec![
                     Cell::new(&entry.hour).fg(Color::White),
                     Cell::new(&clients_col),
@@ -2185,6 +2195,9 @@ fn run_hourly_report(
                     Cell::new(format_tokens_with_commas(entry.cache_read))
                         .set_alignment(CellAlignment::Right),
                     Cell::new(format_tokens_with_commas(entry.cache_write))
+                        .set_alignment(CellAlignment::Right),
+                    Cell::new(&cache_hit)
+                        .fg(Color::Cyan)
                         .set_alignment(CellAlignment::Right),
                     Cell::new(format_currency(entry.cost))
                         .fg(Color::Green)

@@ -4,7 +4,8 @@ use ratatui::widgets::{
 };
 
 use super::widgets::{
-    format_cost, format_tokens, get_client_display_name, get_model_color, get_provider_display_name,
+    format_cache_hit_rate, format_cost, format_tokens, get_client_display_name, get_model_color,
+    get_provider_display_name,
 };
 use crate::tui::app::{App, SortDirection, SortField};
 
@@ -59,8 +60,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             "Source",
             "Input",
             "Output",
-            "Cache Read",
-            "Cache Write",
+            "Cache R",
+            "Cache W",
+            "Cache%",
             "Total",
             "Cost",
         ]
@@ -83,8 +85,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             .enumerate()
             .map(|(i, h)| {
                 let indicator = match i {
-                    8 if !is_narrow => sort_indicator(SortField::Tokens),
-                    9 if !is_narrow => sort_indicator(SortField::Cost),
+                    9 if !is_narrow => sort_indicator(SortField::Tokens),
+                    10 if !is_narrow => sort_indicator(SortField::Cost),
                     1 if is_very_narrow => sort_indicator(SortField::Cost),
                     2 if is_narrow && !is_very_narrow => sort_indicator(SortField::Cost),
                     1 if is_narrow && !is_very_narrow => sort_indicator(SortField::Tokens),
@@ -149,6 +151,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         .style(Style::default().fg(Color::Rgb(100, 150, 200))),
                     Cell::from(format_tokens(model.tokens.cache_write))
                         .style(Style::default().fg(Color::Rgb(200, 150, 100))),
+                    Cell::from(format_cache_hit_rate(
+                        model.tokens.cache_read,
+                        model.tokens.input,
+                        model.tokens.cache_write,
+                    ))
+                    .style(Style::default().fg(Color::Cyan)),
                     Cell::from(format_tokens(model.tokens.total())),
                     Cell::from(format_cost(model.cost)).style(Style::default().fg(Color::Green)),
                 ]
@@ -182,8 +190,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(14),
             Constraint::Length(10),
             Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(10),
         ]

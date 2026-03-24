@@ -43,6 +43,22 @@ pub fn format_cost(cost: f64) -> String {
     }
 }
 
+/// Cache reuse multiplier: cached reads per full-price input token.
+/// `cache_read / (input + cache_write)` — how many low-cost reads you
+/// got for every token you paid full price (fresh input or cache write).
+pub fn format_cache_hit_rate(cache_read: u64, input: u64, cache_write: u64) -> String {
+    let paid = input.saturating_add(cache_write);
+    if paid == 0 {
+        return if cache_read > 0 {
+            "∞".to_string()
+        } else {
+            "—".to_string()
+        };
+    }
+    let ratio = cache_read as f64 / paid as f64;
+    format!("{:.1}x", ratio)
+}
+
 pub fn get_model_color(model: &str) -> Color {
     let provider = get_provider_from_model(model);
     let config = TokscaleConfig::load();

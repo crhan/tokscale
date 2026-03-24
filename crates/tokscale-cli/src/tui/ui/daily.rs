@@ -4,7 +4,7 @@ use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
 };
 
-use super::widgets::{format_cost, format_tokens};
+use super::widgets::{format_cache_hit_rate, format_cost, format_tokens};
 use crate::tui::app::{App, SortDirection, SortField};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -53,8 +53,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             "Date",
             "Input",
             "Output",
-            "Cache Read",
-            "Cache Write",
+            "Cache R",
+            "Cache W",
+            "Cache%",
             "Total",
             "Cost",
         ]
@@ -78,9 +79,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|(i, h)| {
                 let indicator = match (i, is_narrow, is_very_narrow) {
                     (0, _, _) => sort_indicator(SortField::Date),
-                    (5, false, false) => sort_indicator(SortField::Tokens),
+                    (6, false, false) => sort_indicator(SortField::Tokens),
                     (1, true, false) => sort_indicator(SortField::Tokens),
-                    (6, false, false) => sort_indicator(SortField::Cost),
+                    (7, false, false) => sort_indicator(SortField::Cost),
                     (2, true, false) => sort_indicator(SortField::Cost),
                     (1, _, true) => sort_indicator(SortField::Cost),
                     _ => "",
@@ -153,6 +154,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         .style(Style::default().fg(Color::Rgb(100, 150, 200))),
                     Cell::from(format_tokens(day.tokens.cache_write))
                         .style(Style::default().fg(Color::Rgb(200, 150, 100))),
+                    Cell::from(format_cache_hit_rate(
+                        day.tokens.cache_read,
+                        day.tokens.input,
+                        day.tokens.cache_write,
+                    ))
+                    .style(Style::default().fg(Color::Cyan)),
                     Cell::from(format_tokens(day.tokens.total())),
                     Cell::from(format_cost(day.cost)).style(Style::default().fg(Color::Green)),
                 ]
@@ -185,8 +192,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(12),
             Constraint::Length(10),
             Constraint::Length(10),
-            Constraint::Length(12),
-            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(10),
+            Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(10),
         ]

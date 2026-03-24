@@ -506,6 +506,12 @@ impl App {
         self.selected_index = 0;
         self.selected_graph_cell = None;
         self.stats_breakdown_total_lines = 0;
+
+        // Hourly tab defaults to newest-first; other tabs keep cost sort
+        if self.current_tab == Tab::Hourly {
+            self.sort_field = SortField::Date;
+            self.sort_direction = SortDirection::Descending;
+        }
     }
 
     fn move_selection_up(&mut self) {
