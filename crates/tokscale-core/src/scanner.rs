@@ -796,6 +796,22 @@ mod tests {
     }
 
     #[test]
+    fn test_scan_all_clients_openclaw_deleted_transcript() {
+        let dir = TempDir::new().unwrap();
+        let home = dir.path();
+
+        let openclaw_sessions = home.join(".openclaw/agents/main/sessions");
+        fs::create_dir_all(&openclaw_sessions).unwrap();
+        File::create(openclaw_sessions.join("session-archived.jsonl.deleted.1700000000000"))
+            .unwrap();
+
+        let result = scan_all_clients(home.to_str().unwrap(), &["openclaw".to_string()]);
+        assert_eq!(result.get(ClientId::OpenClaw).len(), 1);
+        assert!(result.get(ClientId::OpenClaw)[0]
+            .ends_with("session-archived.jsonl.deleted.1700000000000"));
+    }
+
+    #[test]
     fn test_scan_all_clients_multiple() {
         let dir = TempDir::new().unwrap();
         let home = dir.path();
@@ -949,8 +965,7 @@ mod tests {
             .iter()
             .copied()
             .collect();
-        let dirs =
-            parse_extra_dirs("claude:/tmp/mac-sessions,openclaw:/tmp/oc-extra", &enabled);
+        let dirs = parse_extra_dirs("claude:/tmp/mac-sessions,openclaw:/tmp/oc-extra", &enabled);
         assert_eq!(dirs.len(), 2);
         assert_eq!(dirs[0].0, ClientId::Claude);
         assert_eq!(dirs[0].1, "/tmp/mac-sessions");
