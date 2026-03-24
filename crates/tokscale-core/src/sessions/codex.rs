@@ -3,10 +3,10 @@
 //! Parses JSONL files from ~/.codex/sessions/
 //! Note: This parser has stateful logic to track model and delta calculations.
 
+use super::UnifiedMessage;
 use super::utils::{
     extract_i64, extract_string, file_modified_timestamp_ms, parse_timestamp_value,
 };
-use super::UnifiedMessage;
 use crate::TokenBreakdown;
 use serde::Deserialize;
 use serde_json::Value;
@@ -408,7 +408,7 @@ pub(crate) fn parse_codex_file_incremental(
                 consumed_offset: start_offset,
                 parse_succeeded: false,
                 state,
-            }
+            };
         }
     };
 

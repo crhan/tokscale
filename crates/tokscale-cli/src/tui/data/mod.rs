@@ -7,8 +7,8 @@ use tokio::runtime::{Handle, Runtime};
 
 use tokscale_core::sessions::UnifiedMessage;
 use tokscale_core::{
-    normalize_model_for_grouping, parse_local_unified_messages, sessions, ClientId, GroupBy,
-    LocalParseOptions,
+    ClientId, GroupBy, LocalParseOptions, normalize_model_for_grouping,
+    parse_local_unified_messages, sessions,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -669,9 +669,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
     use tokio::runtime::{Handle, Runtime};
+    use tokscale_core::TokenBreakdown as CoreTokenBreakdown;
     use tokscale_core::parse_local_unified_messages_with_pricing;
     use tokscale_core::pricing::{ModelPricing, PricingService};
-    use tokscale_core::TokenBreakdown as CoreTokenBreakdown;
 
     fn test_pricing_service() -> PricingService {
         let mut litellm = HashMap::new();
@@ -1203,10 +1203,12 @@ mod tests {
 
         assert_eq!(usage.agents.len(), 2);
         assert!(usage.agents.iter().any(|agent| agent.agent == "Sisyphus"));
-        assert!(usage
-            .agents
-            .iter()
-            .any(|agent| agent.agent == "Sisyphus (Ultraworker)"));
+        assert!(
+            usage
+                .agents
+                .iter()
+                .any(|agent| agent.agent == "Sisyphus (Ultraworker)")
+        );
     }
 
     #[test]

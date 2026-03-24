@@ -1,5 +1,5 @@
-use crate::sessions::codex::CodexParseState;
 use crate::UnifiedMessage;
+use crate::sessions::codex::CodexParseState;
 use bincode::Options;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -783,7 +783,7 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", temp_home.path());
 
-        let test_result = (|| {
+        {
             let cache_file = cache_path().unwrap();
             ensure_cache_dir(cache_file.parent().unwrap()).unwrap();
             let file = File::create(&cache_file).unwrap();
@@ -791,13 +791,12 @@ mod tests {
 
             let loaded = SourceMessageCache::load();
             assert!(loaded.entries.is_empty());
-        })();
+        }
 
         match original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
-        test_result
     }
 
     #[test]
@@ -807,7 +806,7 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", temp_home.path());
 
-        let test_result = (|| {
+        {
             let cache_file = cache_path().unwrap();
             ensure_cache_dir(cache_file.parent().unwrap()).unwrap();
             let store = CachedSourceStore {
@@ -820,13 +819,12 @@ mod tests {
 
             let loaded = SourceMessageCache::load();
             assert!(loaded.entries.is_empty());
-        })();
+        }
 
         match original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
-        test_result
     }
 
     #[test]
@@ -836,18 +834,17 @@ mod tests {
         let original_xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
         std::env::set_var("XDG_RUNTIME_DIR", runtime_dir.path());
 
-        let test_result = (|| {
+        {
             assert_eq!(
                 fallback_cache_dir(),
                 Some(runtime_dir.path().join("tokscale"))
             );
-        })();
+        }
 
         match original_xdg_runtime_dir {
             Some(path) => std::env::set_var("XDG_RUNTIME_DIR", path),
             None => std::env::remove_var("XDG_RUNTIME_DIR"),
         }
-        test_result
     }
 
     #[test]
@@ -860,7 +857,7 @@ mod tests {
         let mut cache = SourceMessageCache::default();
         assert!(!cache.dirty);
 
-        let test_result = (|| {
+        {
             let file = write_temp_file(b"{}\n");
             let fingerprint = SourceFingerprint::from_path(file.path()).unwrap();
             cache.insert(CachedSourceEntry::new(
@@ -874,13 +871,12 @@ mod tests {
 
             cache.save_if_dirty();
             assert!(!cache.dirty);
-        })();
+        }
 
         match original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
-        test_result
     }
 
     #[test]
@@ -890,7 +886,7 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", temp_home.path());
 
-        let test_result = (|| {
+        {
             let file_one = write_temp_file(b"{\"id\":1}\n");
             let file_two = write_temp_file(b"{\"id\":2}\n");
 
@@ -918,13 +914,12 @@ mod tests {
             let loaded = SourceMessageCache::load();
             assert!(loaded.get(file_one.path()).is_some());
             assert!(loaded.get(file_two.path()).is_some());
-        })();
+        }
 
         match original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
         }
-        test_result
     }
 
     #[cfg(unix)]
