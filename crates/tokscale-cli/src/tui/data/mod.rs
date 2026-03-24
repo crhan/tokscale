@@ -672,7 +672,7 @@ mod tests {
     #[test]
     fn test_client_all() {
         let clients = ClientId::ALL;
-        assert_eq!(clients.len(), 14);
+        assert_eq!(clients.len(), 15);
         assert_eq!(clients[0], ClientId::OpenCode);
         assert_eq!(clients[1], ClientId::Claude);
         assert_eq!(clients[2], ClientId::Codex);
@@ -687,6 +687,7 @@ mod tests {
         assert_eq!(clients[11], ClientId::RooCode);
         assert_eq!(clients[12], ClientId::KiloCode);
         assert_eq!(clients[13], ClientId::Mux);
+        assert_eq!(clients[14], ClientId::Kilo);
     }
 
     #[test]
@@ -729,9 +730,13 @@ mod tests {
         );
         assert_eq!(
             crate::tui::client_ui::display_name(ClientId::KiloCode),
-            "Kilo"
+            "KiloCode"
         );
         assert_eq!(crate::tui::client_ui::display_name(ClientId::Mux), "Mux");
+        assert_eq!(
+            crate::tui::client_ui::display_name(ClientId::Kilo),
+            "Kilo CLI"
+        );
     }
 
     #[test]
@@ -750,6 +755,7 @@ mod tests {
         assert_eq!(crate::tui::client_ui::hotkey(ClientId::RooCode), 'r');
         assert_eq!(crate::tui::client_ui::hotkey(ClientId::KiloCode), 'k');
         assert_eq!(crate::tui::client_ui::hotkey(ClientId::Mux), 'x');
+        assert_eq!(crate::tui::client_ui::hotkey(ClientId::Kilo), 'l');
     }
 
     #[test]
@@ -799,6 +805,10 @@ mod tests {
         assert_eq!(
             crate::tui::client_ui::from_hotkey('k'),
             Some(ClientId::KiloCode)
+        );
+        assert_eq!(
+            crate::tui::client_ui::from_hotkey('l'),
+            Some(ClientId::Kilo)
         );
         assert_eq!(crate::tui::client_ui::from_hotkey('x'), Some(ClientId::Mux));
         assert_eq!(crate::tui::client_ui::from_hotkey('a'), None);
