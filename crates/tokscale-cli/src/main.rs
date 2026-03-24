@@ -3323,6 +3323,34 @@ struct SubmitMetrics {
     sources: Option<Vec<String>>,
 }
 
+fn cap_graph_result_to_utc_today(
+    graph_result: &mut tokscale_core::GraphResult,
+    utc_today: &str,
+) -> bool {
+    let pre_cap_len = graph_result.contributions.len();
+    graph_result
+        .contributions
+        .retain(|c| c.date.as_str() <= utc_today);
+    if graph_result.contributions.len() == pre_cap_len {
+        return false;
+    }
+
+    graph_result.meta.date_range_start = graph_result
+        .contributions
+        .first()
+        .map(|c| c.date.clone())
+        .unwrap_or_default();
+    graph_result.meta.date_range_end = graph_result
+        .contributions
+        .last()
+        .map(|c| c.date.clone())
+        .unwrap_or_default();
+    graph_result.summary = tokscale_core::calculate_summary(&graph_result.contributions);
+    graph_result.years = tokscale_core::calculate_years(&graph_result.contributions);
+
+    true
+}
+
 fn run_submit_command(
     clients: Option<Vec<String>>,
     since: Option<String>,
@@ -3402,24 +3430,7 @@ fn run_submit_command(
     // See: https://github.com/junhoyeo/tokscale/issues/318
     let utc_today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let mut graph_result = graph_result;
-    let pre_cap_len = graph_result.contributions.len();
-    graph_result
-        .contributions
-        .retain(|c| c.date.as_str() <= utc_today.as_str());
-    if graph_result.contributions.len() < pre_cap_len {
-        graph_result.meta.date_range_start = graph_result
-            .contributions
-            .first()
-            .map(|c| c.date.clone())
-            .unwrap_or_default();
-        graph_result.meta.date_range_end = graph_result
-            .contributions
-            .last()
-            .map(|c| c.date.clone())
-            .unwrap_or_default();
-        graph_result.summary = tokscale_core::calculate_summary(&graph_result.contributions);
-        graph_result.years = tokscale_core::calculate_years(&graph_result.contributions);
-    }
+    cap_graph_result_to_utc_today(&mut graph_result, &utc_today);
 
     println!("{}", "  Data to submit:".white());
     println!(
@@ -3802,6 +3813,77 @@ fn run_headless_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokscale_core::{
+        calculate_summary, calculate_years, ClientContribution, DailyContribution, DailyTotals,
+        GraphMeta, GraphResult, TokenBreakdown, YearSummary,
+    };
+
+    fn token_breakdown(total_tokens: i64) -> TokenBreakdown {
+        TokenBreakdown {
+            input: total_tokens,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            reasoning: 0,
+        }
+    }
+
+    fn daily_contribution(
+        date: &str,
+        total_tokens: i64,
+        total_cost: f64,
+        client: &str,
+        model_id: &str,
+    ) -> DailyContribution {
+        DailyContribution {
+            date: date.to_string(),
+            totals: DailyTotals {
+                tokens: total_tokens,
+                cost: total_cost,
+                messages: 1,
+            },
+            intensity: 0,
+            token_breakdown: token_breakdown(total_tokens),
+            clients: vec![ClientContribution {
+                client: client.to_string(),
+                model_id: model_id.to_string(),
+                provider_id: "openai".to_string(),
+                tokens: token_breakdown(total_tokens),
+                cost: total_cost,
+                messages: 1,
+            }],
+        }
+    }
+
+    fn graph_result_with_contributions(contributions: Vec<DailyContribution>) -> GraphResult {
+        GraphResult {
+            meta: GraphMeta {
+                generated_at: "2026-03-24T00:00:00Z".to_string(),
+                version: "test".to_string(),
+                date_range_start: contributions
+                    .first()
+                    .map(|c| c.date.clone())
+                    .unwrap_or_default(),
+                date_range_end: contributions
+                    .last()
+                    .map(|c| c.date.clone())
+                    .unwrap_or_default(),
+                processing_time_ms: 0,
+            },
+            summary: calculate_summary(&contributions),
+            years: calculate_years(&contributions),
+            contributions,
+        }
+    }
+
+    fn year_summary(graph: &GraphResult, year: &str) -> YearSummary {
+        graph
+            .years
+            .iter()
+            .find(|entry| entry.year == year)
+            .cloned()
+            .unwrap()
+    }
 
     #[test]
     fn test_build_client_filter_all_false() {
@@ -4273,5 +4355,78 @@ mod tests {
         let (position2, forward2) = LightSpinner::scanner_state(54);
         assert_eq!(position1, position2);
         assert_eq!(forward1, forward2);
+    }
+
+    #[test]
+    fn test_cap_graph_result_to_utc_today_recalculates_all_derived_fields() {
+        let mut graph = graph_result_with_contributions(vec![
+            daily_contribution("2026-12-30", 10, 1.25, "codex", "model-a"),
+            daily_contribution("2026-12-31", 20, 2.50, "codex", "model-b"),
+            daily_contribution("2027-01-01", 30, 3.75, "cursor", "model-c"),
+        ]);
+
+        let changed = cap_graph_result_to_utc_today(&mut graph, "2026-12-31");
+
+        assert!(changed);
+        assert_eq!(graph.meta.date_range_start, "2026-12-30");
+        assert_eq!(graph.meta.date_range_end, "2026-12-31");
+        assert_eq!(graph.contributions.len(), 2);
+        assert_eq!(graph.summary.total_tokens, 30);
+        assert_eq!(graph.summary.total_cost, 3.75);
+        assert_eq!(graph.summary.total_days, 2);
+        assert_eq!(graph.summary.active_days, 2);
+        assert_eq!(graph.summary.clients, vec!["codex".to_string()]);
+        assert_eq!(
+            graph.summary.models,
+            vec!["model-a".to_string(), "model-b".to_string()]
+        );
+        assert_eq!(graph.years.len(), 1);
+        assert_eq!(year_summary(&graph, "2026").total_tokens, 30);
+    }
+
+    #[test]
+    fn test_cap_graph_result_to_utc_today_clears_empty_post_cap_state() {
+        let mut graph = graph_result_with_contributions(vec![daily_contribution(
+            "2027-01-01",
+            30,
+            3.75,
+            "cursor",
+            "model-c",
+        )]);
+
+        let changed = cap_graph_result_to_utc_today(&mut graph, "2026-12-31");
+
+        assert!(changed);
+        assert!(graph.contributions.is_empty());
+        assert_eq!(graph.meta.date_range_start, "");
+        assert_eq!(graph.meta.date_range_end, "");
+        assert_eq!(graph.summary.total_tokens, 0);
+        assert_eq!(graph.summary.total_cost, 0.0);
+        assert_eq!(graph.summary.total_days, 0);
+        assert_eq!(graph.summary.active_days, 0);
+        assert!(graph.summary.clients.is_empty());
+        assert!(graph.summary.models.is_empty());
+        assert!(graph.years.is_empty());
+    }
+
+    #[test]
+    fn test_cap_graph_result_to_utc_today_is_noop_when_all_dates_are_in_range() {
+        let mut graph = graph_result_with_contributions(vec![
+            daily_contribution("2026-12-30", 10, 1.25, "codex", "model-a"),
+            daily_contribution("2026-12-31", 20, 2.50, "codex", "model-b"),
+        ]);
+        let original_summary = graph.summary.clone();
+        let original_years = graph.years.clone();
+
+        let changed = cap_graph_result_to_utc_today(&mut graph, "2026-12-31");
+
+        assert!(!changed);
+        assert_eq!(graph.meta.date_range_start, "2026-12-30");
+        assert_eq!(graph.meta.date_range_end, "2026-12-31");
+        assert_eq!(graph.summary.total_tokens, original_summary.total_tokens);
+        assert_eq!(graph.summary.total_cost, original_summary.total_cost);
+        assert_eq!(graph.summary.clients, original_summary.clients);
+        assert_eq!(graph.summary.models, original_summary.models);
+        assert_eq!(graph.years.len(), original_years.len());
     }
 }
