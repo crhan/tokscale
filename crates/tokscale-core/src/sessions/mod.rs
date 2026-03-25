@@ -33,6 +33,9 @@ pub struct UnifiedMessage {
     pub cost: f64,
     pub agent: Option<String>,
     pub dedup_key: Option<String>,
+    /// True if this message is the first assistant response after a user turn.
+    /// Used to count user interaction turns (as opposed to API message count).
+    pub is_turn_start: bool,
 }
 
 pub fn normalize_agent_name(agent: &str) -> String {
@@ -175,6 +178,7 @@ impl UnifiedMessage {
             cost,
             agent,
             dedup_key,
+            is_turn_start: false,
         }
     }
 }

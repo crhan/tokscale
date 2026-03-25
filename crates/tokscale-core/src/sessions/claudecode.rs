@@ -68,6 +68,9 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
     let mut processed_hashes: HashSet<String> = HashSet::new();
     let mut headless_state = ClaudeHeadlessState::default();
     let mut buffer = Vec::with_capacity(4096);
+    // Tracks whether the previous entry was a user message,
+    // so the next assistant message can be marked as a turn start.
+    let mut pending_turn_start = false;
 
     for line in reader.lines() {
         let line = match line {
@@ -84,6 +87,17 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
         buffer.clear();
         buffer.extend_from_slice(trimmed.as_bytes());
         if let Ok(entry) = simd_json::from_slice::<ClaudeEntry>(&mut buffer) {
+            if entry.entry_type == "user" {
+                // Distinguish real human input from tool results / system messages.
+                // Tool results have content as a JSON array (e.g. [{"type":"tool_result",...}]).
+                // System messages have XML-tagged content (e.g. <local-command-stdout>).
+                // Only plain text without XML tags counts as a genuine user turn.
+                if is_human_turn(trimmed) {
+                    pending_turn_start = true;
+                }
+                continue;
+            }
+
             // Only process assistant messages with usage data
             if entry.entry_type == "assistant" {
                 let message = match entry.message {
@@ -119,7 +133,7 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                     .map(|dt| dt.timestamp_millis())
                     .unwrap_or(fallback_timestamp);
 
-                messages.push(UnifiedMessage::new_with_dedup(
+                let mut msg = UnifiedMessage::new_with_dedup(
                     "claude",
                     model,
                     "anthropic",
@@ -134,7 +148,13 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                     },
                     0.0,
                     dedup_key,
-                ));
+                );
+                // Mark the first assistant response after a user message as a turn start
+                if pending_turn_start {
+                    msg.is_turn_start = true;
+                    pending_turn_start = false;
+                }
+                messages.push(msg);
                 handled = true;
             }
         }
@@ -277,6 +297,34 @@ fn extract_claude_headless_message(
     ))
 }
 
+/// Check if a `type: "user"` JSONL entry represents genuine human input.
+///
+/// Returns false for tool results (content is a JSON array) and system/command
+/// messages (content is an XML-tagged string like `<local-command-stdout>`).
+fn is_human_turn(raw_line: &str) -> bool {
+    // Quick heuristic on the raw JSON string to avoid a full re-parse.
+    // Tool results have `"content":[` (array), human input has `"content":"` (string).
+    if let Some(pos) = raw_line.find("\"content\":") {
+        let after = &raw_line[pos + 10..];
+        let after_trimmed = after.trim_start();
+        if after_trimmed.starts_with('[') {
+            // Array content → tool_result, not a human turn
+            return false;
+        }
+        if after_trimmed.starts_with('"') {
+            // String content — check for XML-tagged system messages
+            if after_trimmed.len() > 1 {
+                let content_start = &after_trimmed[1..];
+                if content_start.starts_with('<') {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    false
+}
+
 fn extract_claude_model(value: &Value) -> Option<String> {
     extract_string(value.get("model")).or_else(|| {
         value
@@ -411,6 +459,67 @@ mod tests {
 
         assert_eq!(messages.len(), 1, "User messages should be ignored");
         assert_eq!(messages[0].tokens.input, 100);
+    }
+
+    #[test]
+    fn test_turn_start_detection() {
+        // Simulate: user asks → assistant responds → tool_result (as user) → assistant responds
+        //         → real user asks again → assistant responds
+        // Expected: 2 turns (tool_result should NOT count as a turn)
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Hello"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"user","timestamp":"2024-12-01T10:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"tu_001","content":"file contents here"}]}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:03.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":80}}}
+{"type":"user","timestamp":"2024-12-01T10:00:04.000Z","message":{"content":"Thanks, now do X"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:05.000Z","requestId":"req_003","message":{"id":"msg_003","model":"claude-3-5-sonnet","usage":{"input_tokens":300,"output_tokens":120}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 3, "Should have 3 assistant messages");
+
+        // First assistant after first human user → turn start
+        assert!(messages[0].is_turn_start, "First response should be turn start");
+        // Assistant after tool_result → NOT a new turn
+        assert!(!messages[1].is_turn_start, "Response after tool_result should NOT be turn start");
+        // First assistant after second human user → turn start
+        assert!(messages[2].is_turn_start, "Response after real user input should be turn start");
+
+        let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
+        assert_eq!(turn_count, 2, "Should detect 2 turns");
+    }
+
+    #[test]
+    fn test_turn_start_ignores_system_messages() {
+        // XML-tagged content like <local-command-stdout> should not count as turns
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Do something"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"user","timestamp":"2024-12-01T10:00:02.000Z","message":{"content":"<local-command-stdout>ok</local-command-stdout>"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:03.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":80}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].is_turn_start, "First response after human input is a turn");
+        assert!(!messages[1].is_turn_start, "Response after local-command should NOT be a turn");
+
+        let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
+        assert_eq!(turn_count, 1);
+    }
+
+    #[test]
+    fn test_turn_start_without_user_message() {
+        // No user message → no turn starts (e.g. headless or partial log)
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","message":{"model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","message":{"model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":100}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 2);
+        assert!(!messages[0].is_turn_start);
+        assert!(!messages[1].is_turn_start);
     }
 
     #[test]

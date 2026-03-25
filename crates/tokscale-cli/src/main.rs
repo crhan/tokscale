@@ -2061,6 +2061,7 @@ fn run_hourly_report(
             cache_read: i64,
             cache_write: i64,
             message_count: i32,
+            turn_count: i32,
             cost: f64,
         }
 
@@ -2085,6 +2086,7 @@ fn run_hourly_report(
                     cache_read: e.cache_read,
                     cache_write: e.cache_write,
                     message_count: e.message_count,
+                    turn_count: e.turn_count,
                     cost: e.cost,
                 })
                 .collect(),
@@ -2115,6 +2117,7 @@ fn run_hourly_report(
             table.set_header(vec![
                 Cell::new("Hour").fg(Color::Cyan),
                 Cell::new("Source").fg(Color::Cyan),
+                Cell::new("Turn").fg(Color::Cyan),
                 Cell::new("Msgs").fg(Color::Cyan),
                 Cell::new("Input").fg(Color::Cyan),
                 Cell::new("Output").fg(Color::Cyan),
@@ -2127,9 +2130,15 @@ fn run_hourly_report(
                     c.sort();
                     c.join(", ")
                 };
+                let turn_display = if entry.turn_count > 0 {
+                    entry.turn_count.to_string()
+                } else {
+                    "—".to_string()
+                };
                 table.add_row(vec![
                     Cell::new(&entry.hour).fg(Color::White),
                     Cell::new(&clients_col),
+                    Cell::new(&turn_display).set_alignment(CellAlignment::Right),
                     Cell::new(entry.message_count).set_alignment(CellAlignment::Right),
                     Cell::new(format_tokens_with_commas(entry.input))
                         .set_alignment(CellAlignment::Right),
@@ -2145,6 +2154,7 @@ fn run_hourly_report(
                 Cell::new("Hour").fg(Color::Cyan),
                 Cell::new("Source").fg(Color::Cyan),
                 Cell::new("Models").fg(Color::Cyan),
+                Cell::new("Turn").fg(Color::Cyan),
                 Cell::new("Msgs").fg(Color::Cyan),
                 Cell::new("Input").fg(Color::Cyan),
                 Cell::new("Output").fg(Color::Cyan),
@@ -2183,10 +2193,17 @@ fn run_hourly_report(
                     }
                 };
 
+                let turn_display = if entry.turn_count > 0 {
+                    entry.turn_count.to_string()
+                } else {
+                    "—".to_string()
+                };
+
                 table.add_row(vec![
                     Cell::new(&entry.hour).fg(Color::White),
                     Cell::new(&clients_col),
                     Cell::new(&models_col),
+                    Cell::new(&turn_display).set_alignment(CellAlignment::Right),
                     Cell::new(entry.message_count).set_alignment(CellAlignment::Right),
                     Cell::new(format_tokens_with_commas(entry.input))
                         .set_alignment(CellAlignment::Right),
