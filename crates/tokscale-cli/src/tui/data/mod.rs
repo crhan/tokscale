@@ -62,6 +62,8 @@ pub struct DailyUsage {
     pub tokens: TokenBreakdown,
     pub cost: f64,
     pub models: BTreeMap<String, DailyModelInfo>,
+    pub message_count: u32,
+    pub turn_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +80,8 @@ pub struct HourlyUsage {
     pub cost: f64,
     pub clients: BTreeSet<String>,
     pub models: BTreeMap<String, HourlyModelInfo>,
+    pub message_count: u32,
+    pub turn_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +317,8 @@ impl DataLoader {
                     tokens: TokenBreakdown::default(),
                     cost: 0.0,
                     models: BTreeMap::new(),
+                    message_count: 0,
+                    turn_count: 0,
                 });
 
                 daily_entry.tokens.input = daily_entry
@@ -341,6 +347,10 @@ impl DataLoader {
                     0.0
                 };
                 daily_entry.cost += msg_cost;
+                daily_entry.message_count += 1;
+                if msg.is_turn_start {
+                    daily_entry.turn_count += 1;
+                }
 
                 let model_info = daily_entry
                     .models
@@ -390,6 +400,8 @@ impl DataLoader {
                             cost: 0.0,
                             clients: BTreeSet::new(),
                             models: BTreeMap::new(),
+                            message_count: 0,
+                            turn_count: 0,
                         });
 
                 hourly_entry.tokens.input = hourly_entry
@@ -418,6 +430,10 @@ impl DataLoader {
                     0.0
                 };
                 hourly_entry.cost += h_cost;
+                hourly_entry.message_count += 1;
+                if msg.is_turn_start {
+                    hourly_entry.turn_count += 1;
+                }
                 hourly_entry.clients.insert(msg.client.clone());
 
                 let h_model = hourly_entry
@@ -874,6 +890,8 @@ mod tests {
             tokens: TokenBreakdown::default(),
             cost: 0.0,
             models: BTreeMap::new(),
+            message_count: 0,
+            turn_count: 0,
         }];
         let graph = build_contribution_graph_for_today(&daily, today);
         let last_day = graph
@@ -1230,12 +1248,16 @@ after"#,
                 tokens: TokenBreakdown::default(),
                 cost: 0.0,
                 models: BTreeMap::new(),
+                message_count: 0,
+                turn_count: 0,
             },
             DailyUsage {
                 date: NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(),
                 tokens: TokenBreakdown::default(),
                 cost: 0.0,
                 models: BTreeMap::new(),
+                message_count: 0,
+                turn_count: 0,
             },
         ];
         let (current, longest) = calculate_streaks_for_today(&daily, today);

@@ -47,16 +47,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     let header_cells = if is_very_narrow {
         vec!["Date", "Cost"]
     } else if is_narrow {
-        vec!["Date", "Tokens", "Cost"]
+        vec!["Date", "Turn", "Msgs", "Tokens", "Cost"]
     } else {
         vec![
-            "Date",
-            "Input",
-            "Output",
-            "Cache R",
-            "Cache W",
-            "Cache×",
-            "Total",
+            "Date", "Turn", "Msgs", "Input", "Output", "Cache R", "Cache W", "Cache×", "Total",
             "Cost",
         ]
     };
@@ -79,10 +73,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             .map(|(i, h)| {
                 let indicator = match (i, is_narrow, is_very_narrow) {
                     (0, _, _) => sort_indicator(SortField::Date),
-                    (6, false, false) => sort_indicator(SortField::Tokens),
-                    (1, true, false) => sort_indicator(SortField::Tokens),
-                    (7, false, false) => sort_indicator(SortField::Cost),
-                    (2, true, false) => sort_indicator(SortField::Cost),
+                    (8, false, false) => sort_indicator(SortField::Tokens),
+                    (3, true, false) => sort_indicator(SortField::Tokens),
+                    (9, false, false) => sort_indicator(SortField::Cost),
+                    (4, true, false) => sort_indicator(SortField::Cost),
                     (1, _, true) => sort_indicator(SortField::Cost),
                     _ => "",
                 };
@@ -126,6 +120,11 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(format_cost(day.cost)).style(Style::default().fg(Color::Green)),
                 ]
             } else if is_narrow {
+                let turn_str = if day.turn_count > 0 {
+                    day.turn_count.to_string()
+                } else {
+                    "\u{2014}".to_string()
+                };
                 vec![
                     Cell::from(day.date.format("%Y-%m-%d").to_string()).style(if is_today {
                         Style::default()
@@ -134,10 +133,17 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         Style::default()
                     }),
+                    Cell::from(turn_str),
+                    Cell::from(day.message_count.to_string()),
                     Cell::from(format_tokens(day.tokens.total())),
                     Cell::from(format_cost(day.cost)).style(Style::default().fg(Color::Green)),
                 ]
             } else {
+                let turn_str = if day.turn_count > 0 {
+                    day.turn_count.to_string()
+                } else {
+                    "\u{2014}".to_string()
+                };
                 vec![
                     Cell::from(day.date.format("%Y-%m-%d").to_string()).style(if is_today {
                         Style::default()
@@ -146,6 +152,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     } else {
                         Style::default().add_modifier(Modifier::BOLD)
                     }),
+                    Cell::from(turn_str),
+                    Cell::from(day.message_count.to_string()),
                     Cell::from(format_tokens(day.tokens.input))
                         .style(Style::default().fg(Color::Rgb(100, 200, 100))),
                     Cell::from(format_tokens(day.tokens.output))
@@ -183,13 +191,17 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         vec![Constraint::Percentage(60), Constraint::Percentage(40)]
     } else if is_narrow {
         vec![
-            Constraint::Percentage(40),
             Constraint::Percentage(30),
-            Constraint::Percentage(30),
+            Constraint::Percentage(15),
+            Constraint::Percentage(15),
+            Constraint::Percentage(20),
+            Constraint::Percentage(20),
         ]
     } else {
         vec![
             Constraint::Length(12),
+            Constraint::Length(6),
+            Constraint::Length(6),
             Constraint::Length(10),
             Constraint::Length(10),
             Constraint::Length(10),

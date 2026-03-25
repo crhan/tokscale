@@ -840,6 +840,8 @@ impl App {
                     "cacheWrite": d.tokens.cache_write,
                     "total": d.tokens.total()
                 },
+                "messageCount": d.message_count,
+                "turnCount": d.turn_count,
                 "cost": d.cost
             })).collect::<Vec<_>>(),
             "totals": {
