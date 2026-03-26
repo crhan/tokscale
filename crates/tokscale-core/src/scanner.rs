@@ -86,7 +86,7 @@ pub fn scan_directory(root: &str, pattern: &str) -> Vec<PathBuf> {
         return Vec::new();
     }
 
-    WalkDir::new(root)
+    let mut paths: Vec<PathBuf> = WalkDir::new(root)
         .into_iter()
         .par_bridge()
         .filter_map(|e| e.ok())
@@ -149,7 +149,13 @@ pub fn scan_directory(root: &str, pattern: &str) -> Vec<PathBuf> {
             }
         })
         .map(|e| e.path().to_path_buf())
-        .collect()
+        .collect();
+    // Sort to guarantee deterministic ordering across refreshes.
+    // par_bridge() is explicitly non-deterministic, so without sorting the
+    // order-dependent global dedup (seen_keys) would produce different results
+    // each run, causing visible data fluctuations when pressing 'r'.
+    paths.sort();
+    paths
 }
 
 /// Parse a `TOKSCALE_EXTRA_DIRS`-formatted string into (ClientId, path) pairs.
