@@ -9,7 +9,7 @@ use super::UnifiedMessage;
 use crate::TokenBreakdown;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
@@ -64,8 +64,13 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
     };
 
     let reader = BufReader::new(file);
-    let mut messages = Vec::with_capacity(64);
-    let mut processed_hashes: HashSet<String> = HashSet::new();
+    let mut messages: Vec<UnifiedMessage> = Vec::with_capacity(64);
+    // Maps dedup_key to the index in `messages` of the first occurrence.
+    // CC's streaming API writes the same messageId:requestId multiple times as the
+    // response streams in; the last entry carries the final (complete) output token count.
+    // We update the existing entry whenever a later occurrence has more output tokens,
+    // so we always keep the most complete record rather than the earliest partial one.
+    let mut processed_hashes: HashMap<String, usize> = HashMap::new();
     let mut headless_state = ClaudeHeadlessState::default();
     let mut buffer = Vec::with_capacity(4096);
 
@@ -91,21 +96,34 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                     None => continue,
                 };
 
-                // Build dedup key for global deduplication (messageId:requestId composite)
-                let dedup_key = match (&message.id, &entry.request_id) {
-                    (Some(msg_id), Some(req_id)) => {
-                        let hash = format!("{}:{}", msg_id, req_id);
-                        if !processed_hashes.insert(hash.clone()) {
-                            continue;
-                        }
-                        Some(hash)
-                    }
-                    _ => None,
-                };
-
                 let usage = match message.usage {
                     Some(u) => u,
                     None => continue,
+                };
+
+                // Build dedup key for global deduplication (messageId:requestId composite).
+                // For streaming responses CC writes the same key multiple times; update the
+                // existing entry if this occurrence has more output tokens (final > partial).
+                let dedup_key = match (&message.id, &entry.request_id) {
+                    (Some(msg_id), Some(req_id)) => {
+                        let hash = format!("{}:{}", msg_id, req_id);
+                        if let Some(&existing_idx) = processed_hashes.get(&hash) {
+                            let new_output = usage.output_tokens.unwrap_or(0).max(0);
+                            if new_output > messages[existing_idx].tokens.output {
+                                let t = &mut messages[existing_idx].tokens;
+                                t.input = usage.input_tokens.unwrap_or(0).max(0);
+                                t.output = new_output;
+                                t.cache_read =
+                                    usage.cache_read_input_tokens.unwrap_or(0).max(0);
+                                t.cache_write =
+                                    usage.cache_creation_input_tokens.unwrap_or(0).max(0);
+                            }
+                            continue;
+                        }
+                        processed_hashes.insert(hash.clone(), messages.len());
+                        Some(hash)
+                    }
+                    _ => None,
                 };
 
                 let model = match message.model {
@@ -369,6 +387,24 @@ mod tests {
         );
         assert_eq!(messages[0].tokens.input, 100);
         assert_eq!(messages[1].tokens.input, 200);
+    }
+
+    #[test]
+    fn test_deduplication_keeps_max_output_for_streaming_duplicates() {
+        // CC streaming writes the same messageId:requestId multiple times.
+        // The first entry has a partial output_tokens count; the last has the
+        // final (largest) count. We must keep the entry with the highest
+        // output_tokens, not the first-seen entry.
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":31}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:00.100Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":31}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:00.200Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":300}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 1, "Streaming duplicates should collapse to one entry");
+        assert_eq!(messages[0].tokens.output, 300, "Should keep the max output_tokens");
+        assert_eq!(messages[0].tokens.input, 10);
     }
 
     #[test]
