@@ -4,8 +4,8 @@ use ratatui::widgets::{
 };
 
 use super::widgets::{
-    format_cache_hit_rate, format_cost, format_tokens, get_client_display_name, get_model_color,
-    get_provider_display_name,
+    format_cache_hit_rate, format_cost, format_cost_per_million, format_tokens,
+    get_client_display_name, get_model_color, get_provider_display_name,
 };
 use crate::tui::app::{App, SortDirection, SortField};
 
@@ -65,6 +65,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             "Cache×",
             "Total",
             "Cost",
+            "Cost/1M",
         ]
     };
 
@@ -159,6 +160,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     .style(Style::default().fg(Color::Cyan)),
                     Cell::from(format_tokens(model.tokens.total())),
                     Cell::from(format_cost(model.cost)).style(Style::default().fg(Color::Green)),
+                    Cell::from(format_cost_per_million(model.cost, model.tokens.total()))
+                        .style(Style::default().fg(Color::Rgb(150, 200, 150))),
                 ]
             };
 
@@ -195,6 +198,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(10),
+            Constraint::Length(9),
         ]
     };
 

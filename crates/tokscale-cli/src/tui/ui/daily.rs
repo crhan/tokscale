@@ -4,7 +4,7 @@ use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
 };
 
-use super::widgets::{format_cache_hit_rate, format_cost, format_tokens};
+use super::widgets::{format_cache_hit_rate, format_cost, format_cost_per_million, format_tokens};
 use crate::tui::app::{App, SortDirection, SortField};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -51,7 +51,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         vec![
             "Date", "Turn", "Msgs", "Input", "Output", "Cache R", "Cache W", "Cache×", "Total",
-            "Cost",
+            "Cost", "Cost/1M",
         ]
     };
 
@@ -170,6 +170,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     .style(Style::default().fg(Color::Cyan)),
                     Cell::from(format_tokens(day.tokens.total())),
                     Cell::from(format_cost(day.cost)).style(Style::default().fg(Color::Green)),
+                    Cell::from(format_cost_per_million(day.cost, day.tokens.total()))
+                        .style(Style::default().fg(Color::Rgb(150, 200, 150))),
                 ]
             };
 
@@ -209,6 +211,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Length(8),
             Constraint::Length(10),
             Constraint::Length(10),
+            Constraint::Length(9),
         ]
     };
 
