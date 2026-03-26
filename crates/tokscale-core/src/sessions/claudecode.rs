@@ -9,7 +9,7 @@ use super::UnifiedMessage;
 use crate::TokenBreakdown;
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
@@ -23,6 +23,10 @@ pub struct ClaudeEntry {
     /// Request ID for deduplication (used with message.id)
     #[serde(rename = "requestId")]
     pub request_id: Option<String>,
+    /// True for sub-agent sessions spawned by the Agent tool — their user messages
+    /// are automated task dispatches, not genuine human turns.
+    #[serde(rename = "isSidechain", default)]
+    pub is_sidechain: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,18 +62,34 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
         }
     }
 
+    // Sub-agent sessions (isSidechain=true) store automated task dispatches in user
+    // entries. Turn detection is per-entry via entry.is_sidechain below.
+    // Path-based fallback: files inside a `subagents/` directory are always sidechains
+    // even if older CC versions don't emit isSidechain.
+    let path_is_subagent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        == Some("subagents");
+
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
     };
 
     let reader = BufReader::new(file);
-    let mut messages = Vec::with_capacity(64);
-    let mut processed_hashes: HashSet<String> = HashSet::new();
+    let mut messages: Vec<UnifiedMessage> = Vec::with_capacity(64);
+    // Maps dedup_key to the index in `messages` of the first occurrence.
+    // CC's streaming API writes the same messageId:requestId multiple times as the response
+    // streams in; the last entry carries the final (complete) output token count.
+    // We update the existing entry whenever a later occurrence has more output tokens,
+    // so we always keep the most complete record rather than the earliest partial one.
+    let mut processed_hashes: HashMap<String, usize> = HashMap::new();
     let mut headless_state = ClaudeHeadlessState::default();
     let mut buffer = Vec::with_capacity(4096);
     // Tracks whether the previous entry was a user message,
     // so the next assistant message can be marked as a turn start.
+    // Always false for sub-agent sessions (automated dispatch, not human input).
     let mut pending_turn_start = false;
 
     for line in reader.lines() {
@@ -92,7 +112,7 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                 // Tool results have content as a JSON array (e.g. [{"type":"tool_result",...}]).
                 // System messages have XML-tagged content (e.g. <local-command-stdout>).
                 // Only plain text without XML tags counts as a genuine user turn.
-                if is_human_turn(trimmed) {
+                if !entry.is_sidechain && !path_is_subagent && is_human_turn(trimmed) {
                     pending_turn_start = true;
                 }
                 continue;
@@ -105,21 +125,33 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                     None => continue,
                 };
 
-                // Build dedup key for global deduplication (messageId:requestId composite)
-                let dedup_key = match (&message.id, &entry.request_id) {
-                    (Some(msg_id), Some(req_id)) => {
-                        let hash = format!("{}:{}", msg_id, req_id);
-                        if !processed_hashes.insert(hash.clone()) {
-                            continue;
-                        }
-                        Some(hash)
-                    }
-                    _ => None,
-                };
-
                 let usage = match message.usage {
                     Some(u) => u,
                     None => continue,
+                };
+
+                // Build dedup key for global deduplication (messageId:requestId composite).
+                // For streaming responses CC writes the same key multiple times; update the
+                // existing entry if this occurrence has more output tokens (final > partial).
+                let dedup_key = match (&message.id, &entry.request_id) {
+                    (Some(msg_id), Some(req_id)) => {
+                        let hash = format!("{}:{}", msg_id, req_id);
+                        if let Some(&existing_idx) = processed_hashes.get(&hash) {
+                            let new_output = usage.output_tokens.unwrap_or(0).max(0);
+                            if new_output > messages[existing_idx].tokens.output {
+                                let t = &mut messages[existing_idx].tokens;
+                                t.input = usage.input_tokens.unwrap_or(0).max(0);
+                                t.output = new_output;
+                                t.cache_read = usage.cache_read_input_tokens.unwrap_or(0).max(0);
+                                t.cache_write =
+                                    usage.cache_creation_input_tokens.unwrap_or(0).max(0);
+                            }
+                            continue;
+                        }
+                        processed_hashes.insert(hash.clone(), messages.len());
+                        Some(hash)
+                    }
+                    _ => None,
                 };
 
                 let model = match message.model {
@@ -312,9 +344,26 @@ fn is_human_turn(raw_line: &str) -> bool {
             return false;
         }
         if after_trimmed.starts_with('"') {
-            // String content — check for XML-tagged system messages
+            // String content — check for XML-tagged system messages.
+            // Skip JSON-encoded leading whitespace (e.g. "\n<system-reminder>") before
+            // checking for the XML tag, because hooks often prepend a newline escape.
             if after_trimmed.len() > 1 {
-                let content_start = &after_trimmed[1..];
+                let mut content_start = &after_trimmed[1..];
+                while content_start.starts_with("\\n")
+                    || content_start.starts_with("\\r")
+                    || content_start.starts_with("\\t")
+                    || content_start.starts_with(' ')
+                {
+                    let skip = if content_start.starts_with("\\n")
+                        || content_start.starts_with("\\r")
+                        || content_start.starts_with("\\t")
+                    {
+                        2
+                    } else {
+                        1
+                    };
+                    content_start = &content_start[skip..];
+                }
                 if content_start.starts_with('<') {
                     return false;
                 }
@@ -420,6 +469,26 @@ mod tests {
     }
 
     #[test]
+    fn test_deduplication_keeps_max_output_for_streaming_duplicates() {
+        // CC's streaming API writes the same msg_id:req_id multiple times as the response
+        // streams in. The last entry has the final (complete) output token count.
+        // We must keep the entry with the most output tokens, not the first one seen.
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":31}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":31}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:02.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":300}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 1, "All streaming duplicates should collapse to one message");
+        assert_eq!(
+            messages[0].tokens.output, 300,
+            "Should keep the final complete output token count, not the partial 31"
+        );
+        assert_eq!(messages[0].tokens.input, 10);
+    }
+
+    #[test]
     fn test_deduplication_allows_same_message_different_request() {
         let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
 {"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_002","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":150,"output_tokens":75}}}"#;
@@ -506,6 +575,75 @@ mod tests {
 
         let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
         assert_eq!(turn_count, 1);
+    }
+
+    #[test]
+    fn test_turn_start_ignores_hook_system_reminders_with_leading_newline() {
+        // Hooks inject <system-reminder> as user messages, often with a leading \n escape.
+        // e.g. "content":"\n<system-reminder>...</system-reminder>"
+        // This should NOT be counted as a human turn.
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Real question"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"user","timestamp":"2024-12-01T10:00:02.000Z","message":{"content":"\n<system-reminder>\nPreToolUse hook context\n</system-reminder>"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:03.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":80}}}
+{"type":"user","timestamp":"2024-12-01T10:00:04.000Z","message":{"content":"\n<system-reminder>\nPostToolUse hook context\n</system-reminder>"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:05.000Z","requestId":"req_003","message":{"id":"msg_003","model":"claude-3-5-sonnet","usage":{"input_tokens":300,"output_tokens":90}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 3);
+        assert!(messages[0].is_turn_start, "First response after real user input is a turn");
+        assert!(!messages[1].is_turn_start, "Response after \\n<system-reminder> should NOT be a turn");
+        assert!(!messages[2].is_turn_start, "Response after \\n<system-reminder> should NOT be a turn");
+
+        let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
+        assert_eq!(turn_count, 1, "Only 1 real human turn, not 3");
+    }
+
+    #[test]
+    fn test_subagent_sessions_via_path_have_no_turns() {
+        // Sub-agent sessions in a `subagents/` directory must not count any turns,
+        // even without the isSidechain field (older CC versions).
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Write the file /some/path with this content..."}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"user","timestamp":"2024-12-01T10:00:02.000Z","message":{"content":"Continue the task"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:03.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":80}}}"#;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let subagents_dir = tmp.path().join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        let path = subagents_dir.join("agent-abc123.jsonl");
+        std::fs::write(&path, content).unwrap();
+
+        let messages = parse_claude_file(&path);
+
+        assert_eq!(messages.len(), 2);
+        assert!(!messages[0].is_turn_start, "Sub-agent path dispatch should NOT be a turn");
+        assert!(!messages[1].is_turn_start, "Sub-agent path follow-up should NOT be a turn");
+
+        let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
+        assert_eq!(turn_count, 0, "Path-detected sub-agent sessions must have 0 turns");
+    }
+
+    #[test]
+    fn test_sidechain_entries_have_no_turns() {
+        // Sessions with isSidechain=true are automated sub-agent dispatches stored in
+        // flat project directories. Their user messages must not count as human turns.
+        let content = r#"{"type":"user","isSidechain":true,"timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Thoroughly review all design documents in /home/user/project/docs"}}
+{"type":"assistant","isSidechain":true,"timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":500,"output_tokens":200}}}
+{"type":"user","isSidechain":true,"timestamp":"2024-12-01T10:00:02.000Z","message":{"content":[{"type":"tool_result","tool_use_id":"tu_001","content":"done"}]}}
+{"type":"assistant","isSidechain":true,"timestamp":"2024-12-01T10:00:03.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":600,"output_tokens":100}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 2);
+        assert!(!messages[0].is_turn_start, "isSidechain dispatch should NOT be a turn");
+        assert!(!messages[1].is_turn_start, "isSidechain follow-up should NOT be a turn");
+
+        let turn_count: usize = messages.iter().filter(|m| m.is_turn_start).count();
+        assert_eq!(turn_count, 0, "isSidechain sessions must have 0 turns");
     }
 
     #[test]

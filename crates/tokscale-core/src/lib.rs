@@ -369,10 +369,13 @@ fn parse_all_messages_with_pricing(
             .is_none_or(|key| opencode_seen.insert(key.clone()))
     }));
 
+    // flat_map_iter preserves the outer file order (unlike flat_map which degrades to
+    // an unindexed parallel iterator). Combined with sorted scan paths, this ensures
+    // the seen_keys dedup always picks the same winner for cross-file duplicates.
     let claude_messages_raw: Vec<(String, UnifiedMessage)> = scan_result
         .get(ClientId::Claude)
         .par_iter()
-        .flat_map(|path| {
+        .flat_map_iter(|path| {
             sessions::claudecode::parse_claude_file(path)
                 .into_iter()
                 .map(|mut msg| {
@@ -380,7 +383,6 @@ fn parse_all_messages_with_pricing(
                     apply_pricing_if_available(&mut msg, pricing);
                     (dedup_key, msg)
                 })
-                .collect::<Vec<_>>()
         })
         .collect();
 
@@ -1097,17 +1099,17 @@ pub fn parse_local_clients(options: LocalParseOptions) -> Result<ParsedMessages,
     };
     counts.set(ClientId::OpenCode, opencode_count);
 
+    // flat_map_iter preserves file order so seen_keys dedup is stable across refreshes.
     let claude_msgs_raw: Vec<(String, ParsedMessage)> = scan_result
         .get(ClientId::Claude)
         .par_iter()
-        .flat_map(|path| {
+        .flat_map_iter(|path| {
             sessions::claudecode::parse_claude_file(path)
                 .into_iter()
                 .map(|msg| {
                     let dedup_key = msg.dedup_key.clone().unwrap_or_default();
                     (dedup_key, unified_to_parsed(&msg))
                 })
-                .collect::<Vec<_>>()
         })
         .collect();
 
