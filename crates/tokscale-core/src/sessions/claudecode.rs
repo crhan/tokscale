@@ -67,9 +67,9 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
     let mut messages: Vec<UnifiedMessage> = Vec::with_capacity(64);
     // Maps dedup_key to the index in `messages` of the first occurrence.
     // CC's streaming API writes the same messageId:requestId multiple times as the
-    // response streams in; the last entry carries the final (complete) output token count.
-    // We update the existing entry whenever a later occurrence has more output tokens,
-    // so we always keep the most complete record rather than the earliest partial one.
+    // response streams in; later entries often carry more complete token counts.
+    // We merge duplicates using per-field max to always keep the highest value seen
+    // for each token type, ensuring we capture the most complete record.
     let mut processed_hashes: HashMap<String, usize> = HashMap::new();
     let mut headless_state = ClaudeHeadlessState::default();
     let mut buffer = Vec::with_capacity(4096);
@@ -102,22 +102,22 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                 };
 
                 // Build dedup key for global deduplication (messageId:requestId composite).
-                // For streaming responses CC writes the same key multiple times; update the
-                // existing entry if this occurrence has more output tokens (final > partial).
+                // For streaming responses, merge using per-field max to capture the most
+                // complete token counts across all duplicate entries.
                 let dedup_key = match (&message.id, &entry.request_id) {
                     (Some(msg_id), Some(req_id)) => {
                         let hash = format!("{}:{}", msg_id, req_id);
                         if let Some(&existing_idx) = processed_hashes.get(&hash) {
-                            let new_output = usage.output_tokens.unwrap_or(0).max(0);
-                            if new_output > messages[existing_idx].tokens.output {
-                                let t = &mut messages[existing_idx].tokens;
-                                t.input = usage.input_tokens.unwrap_or(0).max(0);
-                                t.output = new_output;
-                                t.cache_read =
-                                    usage.cache_read_input_tokens.unwrap_or(0).max(0);
-                                t.cache_write =
-                                    usage.cache_creation_input_tokens.unwrap_or(0).max(0);
-                            }
+                            // Per-field max merge: each token field is updated independently
+                            let t = &mut messages[existing_idx].tokens;
+                            t.input = t.input.max(usage.input_tokens.unwrap_or(0).max(0));
+                            t.output = t.output.max(usage.output_tokens.unwrap_or(0).max(0));
+                            t.cache_read = t
+                                .cache_read
+                                .max(usage.cache_read_input_tokens.unwrap_or(0).max(0));
+                            t.cache_write = t
+                                .cache_write
+                                .max(usage.cache_creation_input_tokens.unwrap_or(0).max(0));
                             continue;
                         }
                         processed_hashes.insert(hash.clone(), messages.len());
@@ -402,9 +402,57 @@ mod tests {
         let file = create_test_file(content);
         let messages = parse_claude_file(file.path());
 
-        assert_eq!(messages.len(), 1, "Streaming duplicates should collapse to one entry");
-        assert_eq!(messages[0].tokens.output, 300, "Should keep the max output_tokens");
+        assert_eq!(
+            messages.len(),
+            1,
+            "Streaming duplicates should collapse to one entry"
+        );
+        assert_eq!(
+            messages[0].tokens.output, 300,
+            "Should keep the max output_tokens"
+        );
         assert_eq!(messages[0].tokens.input, 10);
+    }
+
+    #[test]
+    fn test_deduplication_per_field_max_not_just_output() {
+        // Later entry has same output but higher input - should still update input
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":100,"cache_read_input_tokens":5}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:00.100Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":50,"output_tokens":100,"cache_read_input_tokens":20}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tokens.output, 100);
+        assert_eq!(
+            messages[0].tokens.input, 50,
+            "Should keep max input even if output unchanged"
+        );
+        assert_eq!(
+            messages[0].tokens.cache_read, 20,
+            "Should keep max cache_read even if output unchanged"
+        );
+    }
+
+    #[test]
+    fn test_deduplication_higher_first_lower_later() {
+        // First entry has higher output than later - should keep first's higher values
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":500}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:00.100Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":100}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0].tokens.output, 500,
+            "Should keep max output (first entry)"
+        );
+        assert_eq!(
+            messages[0].tokens.input, 100,
+            "Should keep max input (first entry)"
+        );
     }
 
     #[test]
