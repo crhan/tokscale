@@ -150,11 +150,10 @@ pub fn scan_directory(root: &str, pattern: &str) -> Vec<PathBuf> {
         })
         .map(|e| e.path().to_path_buf())
         .collect();
-    // Sort to guarantee deterministic ordering across refreshes.
-    // par_bridge() is explicitly non-deterministic, so without sorting the
-    // order-dependent global dedup (seen_keys) would produce different results
-    // each run, causing visible data fluctuations when pressing 'r'.
-    paths.sort();
+    // Sort for deterministic ordering. sort_unstable() is sufficient (no stability
+    // requirement for PathBuf) and avoids allocation. Note: ordering is byte-lexical,
+    // not case-normalized (known Windows/macOS caveat for mixed-case paths).
+    paths.sort_unstable();
     paths
 }
 
@@ -589,6 +588,33 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let files = scan_directory(dir.path().to_str().unwrap(), "*.json");
         assert!(files.is_empty());
+    }
+
+    #[test]
+    fn test_scan_directory_deterministic_order() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path();
+
+        for name in ["zebra.jsonl", "alpha.jsonl", "middle.jsonl", "beta.jsonl"] {
+            File::create(path.join(name)).unwrap();
+        }
+
+        let first = scan_directory(path.to_str().unwrap(), "*.jsonl");
+        let second = scan_directory(path.to_str().unwrap(), "*.jsonl");
+        let third = scan_directory(path.to_str().unwrap(), "*.jsonl");
+
+        assert_eq!(first, second, "Repeated scans must return identical order");
+        assert_eq!(second, third, "Repeated scans must return identical order");
+
+        let names: Vec<_> = first
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["alpha.jsonl", "beta.jsonl", "middle.jsonl", "zebra.jsonl"],
+            "Results must be lexically sorted"
+        );
     }
 
     fn setup_mock_opencode_dir(base: &std::path::Path) {
