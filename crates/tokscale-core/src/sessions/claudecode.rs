@@ -104,7 +104,7 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                 // Build dedup key for global deduplication (messageId:requestId composite).
                 // For streaming responses, merge using per-field max to capture the most
                 // complete token counts across all duplicate entries.
-                let dedup_key = match (&message.id, &entry.request_id) {
+                let pending_hash = match (&message.id, &entry.request_id) {
                     (Some(msg_id), Some(req_id)) => {
                         let hash = format!("{}:{}", msg_id, req_id);
                         if let Some(&existing_idx) = processed_hashes.get(&hash) {
@@ -120,7 +120,6 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                                 .max(usage.cache_creation_input_tokens.unwrap_or(0).max(0));
                             continue;
                         }
-                        processed_hashes.insert(hash.clone(), messages.len());
                         Some(hash)
                     }
                     _ => None,
@@ -136,6 +135,11 @@ pub fn parse_claude_file(path: &Path) -> Vec<UnifiedMessage> {
                     .and_then(|ts| chrono::DateTime::parse_from_rfc3339(&ts).ok())
                     .map(|dt| dt.timestamp_millis())
                     .unwrap_or(fallback_timestamp);
+
+                // Insert dedup index only after all checks pass, right before push
+                let dedup_key = pending_hash.inspect(|hash| {
+                    processed_hashes.insert(hash.clone(), messages.len());
+                });
 
                 messages.push(UnifiedMessage::new_with_dedup(
                     "claude",
@@ -453,6 +457,24 @@ mod tests {
             messages[0].tokens.input, 100,
             "Should keep max input (first entry)"
         );
+    }
+
+    #[test]
+    fn test_deduplication_skips_model_none_without_stale_index() {
+        // First entry has id+requestId+usage but model=null → skipped, no push.
+        // Second entry is a valid duplicate. Must not panic on stale index.
+        let content = r#"{"type":"assistant","timestamp":"2024-12-01T10:00:00.000Z","requestId":"req_001","message":{"id":"msg_001","usage":{"input_tokens":10,"output_tokens":50}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:00.100Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":100}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(
+            messages.len(),
+            1,
+            "Only the entry with model should be kept"
+        );
+        assert_eq!(messages[0].tokens.output, 100);
     }
 
     #[test]
