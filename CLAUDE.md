@@ -7,7 +7,7 @@ Rust CLI tool for tracking Claude/LLM token usage and cost.
 ```bash
 cargo build                      # dev build
 cargo test -p tokscale-cli       # unit + integration tests
-cargo install --path crates/tokscale-cli  # install to ~/.local/bin/tokscale
+cargo install --path crates/tokscale-cli --root ~/.local  # install to ~/.local/bin/tokscale
 ```
 
 ## Post-merge Checklist
