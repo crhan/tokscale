@@ -34,12 +34,19 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // hourly 有 12 列，用独立的宽度断点，不依赖全局 is_narrow()/is_very_narrow()。
-    // < 75: 极窄，只保留 Hour + Cost 两列
-    // < 110: 紧凑，显示 6 列并用 %H:00 格式省去日期前缀
-    // >= 110: 正常，展开全部 12 列，日期显示 %m/%d %H:00
-    let is_very_narrow = app.terminal_width < 75;
-    let is_narrow = app.terminal_width < 110;
+    // hourly 用两组独立断点解耦列数与日期格式：
+    //
+    // 列布局断点 (cols_very_narrow / cols_narrow):
+    //   < 60:  极窄，只保留 Hour + Cost 两列
+    //   60-79: 紧凑，显示 6 列
+    //   >= 80: 展开全部 12 列
+    //
+    // 日期格式断点 (date_compact):
+    //   < 110: 紧凑，%H:00（省去 mm/dd 前缀）
+    //   >= 110: 完整，%m/%d %H:00
+    let cols_very_narrow = app.terminal_width < 60;
+    let cols_narrow = app.terminal_width < 80;
+    let date_compact = app.terminal_width < 110;
     let sort_field = app.sort_field;
     let sort_direction = app.sort_direction;
     let scroll_offset = app.scroll_offset;
@@ -52,9 +59,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .and_hms_opt(now.hour(), 0, 0)
         .unwrap_or(now);
 
-    let header_cells = if is_very_narrow {
+    let header_cells = if cols_very_narrow {
         vec!["Hour", "Cost"]
-    } else if is_narrow {
+    } else if cols_narrow {
         vec!["Hour", "Source", "Turn", "Msgs", "Tokens", "Cost"]
     } else {
         vec![
@@ -79,7 +86,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, h)| {
-                let indicator = match (i, is_narrow, is_very_narrow) {
+                let indicator = match (i, cols_narrow, cols_very_narrow) {
                     (0, _, _) => sort_indicator(SortField::Date),
                     (9, false, false) => sort_indicator(SortField::Tokens),
                     (4, true, false) => sort_indicator(SortField::Tokens),
@@ -109,9 +116,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Number of extra (non-date) cells per row in each display mode — used when
     // building separator rows so they always have the right cell count.
-    let extra_cell_count = if is_very_narrow {
+    let extra_cell_count = if cols_very_narrow {
         1
-    } else if is_narrow {
+    } else if cols_narrow {
         5
     } else {
         11
@@ -164,7 +171,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         // Using literal ":00" makes it unambiguous that this is an hour bucket, not a
         // specific minute.  Chrono treats non-% characters as literals, so "%H:00" and
         // "%m/%d %H:00" both work as expected.
-        let date_str: String = if is_very_narrow || is_narrow {
+        let date_str: String = if date_compact {
             hour.datetime.format("%H:00").to_string()
         } else {
             hour.datetime.format("%m/%d %H:00").to_string()
@@ -174,19 +181,19 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD)
-        } else if !is_very_narrow && !is_narrow {
-            // Normal mode: bold all date cells for readability at wider widths.
+        } else if !cols_very_narrow && !cols_narrow {
+            // 12-col mode (≥80): bold date cells for readability.
             Style::default().add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
 
-        let cells: Vec<Cell> = if is_very_narrow {
+        let cells: Vec<Cell> = if cols_very_narrow {
             vec![
                 Cell::from(date_str).style(date_style),
                 Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
             ]
-        } else if is_narrow {
+        } else if cols_narrow {
             let turn_str = if hour.turn_count > 0 {
                 hour.turn_count.to_string()
             } else {
@@ -247,17 +254,18 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Column widths (hourly-specific breakpoints, independent of global is_narrow).
     //
-    // very_narrow (<75 cols):  Date 35 % + Cost 65 %
-    //   Only Hour + Cost; "HH:00" fits in 5 chars.
+    // cols_very_narrow (<60):   Date 35 % + Cost 65 %
+    //   Only Hour + Cost; "%H:00" fits in 5 chars.
     //
-    // narrow (<110 cols):  6-column layout, Date 12 %.
-    //   "%H:00" saves the 6-char date prefix; Source gets 33 % for client names.
+    // cols_narrow (60-79):  6-column layout, Date 12 %.
+    //   "%H:00" saves the date prefix; Source gets 33 % for client names.
     //
-    // normal (≥110 cols): full 12-column layout.
-    //   Date Length(12) for "%m/%d %H:00"; Source Length(20) for session names.
-    let widths = if is_very_narrow {
+    // 12-col (≥80): full 12-column layout; Date width depends on date_compact:
+    //   date_compact (80-109): Date Length(8) for "%H:00" (5 chars + padding).
+    //   normal (≥110):         Date Length(12) for "%m/%d %H:00" (11 chars).
+    let widths = if cols_very_narrow {
         vec![Constraint::Percentage(35), Constraint::Percentage(65)]
-    } else if is_narrow {
+    } else if cols_narrow {
         vec![
             Constraint::Percentage(12),
             Constraint::Percentage(33),
@@ -267,8 +275,14 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
             Constraint::Percentage(15),
         ]
     } else {
+        // 12-column layout; Date width varies by date format.
+        let date_width = if date_compact {
+            Constraint::Length(8) // "%H:00" (5 chars) + padding
+        } else {
+            Constraint::Length(12) // "%m/%d %H:00" (11 chars)
+        };
         vec![
-            Constraint::Length(12),
+            date_width,
             Constraint::Length(20),
             Constraint::Length(6),
             Constraint::Length(6),
