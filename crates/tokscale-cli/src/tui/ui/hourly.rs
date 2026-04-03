@@ -34,8 +34,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let is_narrow = app.is_narrow();
-    let is_very_narrow = app.is_very_narrow();
+    // hourly 有 12 列，用独立的宽度断点，不依赖全局 is_narrow()/is_very_narrow()。
+    // < 75: 极窄，只保留 Hour + Cost 两列
+    // < 110: 紧凑，显示 6 列并用 %H:00 格式省去日期前缀
+    // >= 110: 正常，展开全部 12 列，日期显示 %m/%d %H:00
+    let is_very_narrow = app.terminal_width < 75;
+    let is_narrow = app.terminal_width < 110;
     let sort_field = app.sort_field;
     let sort_direction = app.sort_direction;
     let scroll_offset = app.scroll_offset;
@@ -241,17 +245,16 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         rows.push(Row::new(cells).style(row_style).height(1));
     }
 
-    // Column widths.
+    // Column widths (hourly-specific breakpoints, independent of global is_narrow).
     //
-    // very_narrow (<60 cols):  Date 35 % + Cost 65 %
-    //   Previously Date was 60 % — that left almost no room for Cost.  Shrinking
-    //   it to 35 % (5-char "HH:00") gives Cost the majority of the line.
+    // very_narrow (<75 cols):  Date 35 % + Cost 65 %
+    //   Only Hour + Cost; "HH:00" fits in 5 chars.
     //
-    // narrow (<80 cols):  Date 12 % — down from 25 %.  The freed 13 % goes to
-    //   Source (20→33 %) so client names have more room.
+    // narrow (<110 cols):  6-column layout, Date 12 %.
+    //   "%H:00" saves the 6-char date prefix; Source gets 33 % for client names.
     //
-    // normal (≥80 cols): Date Length(12) — down from Length(18).  The freed
-    //   6 characters go to Source (14→20) for longer session names.
+    // normal (≥110 cols): full 12-column layout.
+    //   Date Length(12) for "%m/%d %H:00"; Source Length(20) for session names.
     let widths = if is_very_narrow {
         vec![Constraint::Percentage(35), Constraint::Percentage(65)]
     } else if is_narrow {
