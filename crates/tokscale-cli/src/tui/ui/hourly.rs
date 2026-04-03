@@ -1,4 +1,4 @@
-use chrono::{Local, Timelike};
+use chrono::{Local, NaiveDate, Timelike};
 use ratatui::prelude::*;
 use ratatui::widgets::{
     Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
@@ -103,116 +103,161 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let rows: Vec<Row> = hourly[start..end]
-        .iter()
-        .enumerate()
-        .map(|(i, hour)| {
-            let idx = i + start;
-            let is_selected = idx == selected_index;
-            let is_striped = idx % 2 == 1;
-            let is_current = hour.datetime == current_hour;
+    // Number of extra (non-date) cells per row in each display mode — used when
+    // building separator rows so they always have the right cell count.
+    let extra_cell_count = if is_very_narrow {
+        1
+    } else if is_narrow {
+        5
+    } else {
+        11
+    };
 
-            let clients_str: String = {
-                let mut c: Vec<&str> = hour.clients.iter().map(String::as_str).collect();
-                c.sort();
-                c.join(", ")
-            };
+    // Muted style for day-boundary separator rows.
+    let sep_style = Style::default().fg(Color::Rgb(110, 110, 110));
 
-            let cells: Vec<Cell> = if is_very_narrow {
-                vec![
-                    Cell::from(hour.datetime.format("%m/%d %H:%M").to_string()).style(
-                        if is_current {
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        },
-                    ),
-                    Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
-                ]
-            } else if is_narrow {
-                let turn_str = if hour.turn_count > 0 {
-                    hour.turn_count.to_string()
-                } else {
-                    "\u{2014}".to_string()
-                };
-                vec![
-                    Cell::from(hour.datetime.format("%Y-%m-%d %H:%M").to_string()).style(
-                        if is_current {
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        },
-                    ),
-                    Cell::from(clients_str),
-                    Cell::from(turn_str),
-                    Cell::from(hour.message_count.to_string()),
-                    Cell::from(format_tokens(hour.tokens.total())),
-                    Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
-                ]
+    // Build a separator row for the given date.
+    // The first cell holds a centered label; remaining cells are empty to
+    // match the column count of the current display mode.
+    let make_separator = |date: NaiveDate| -> Row {
+        let label = format!("── {} ──", date.format("%m/%d"));
+        let mut cells: Vec<Cell> = Vec::with_capacity(extra_cell_count + 1);
+        cells.push(Cell::from(label).style(sep_style));
+        cells.extend((0..extra_cell_count).map(|_| Cell::from("")));
+        Row::new(cells).style(sep_style).height(1)
+    };
+
+    // Track the date of the last row *before* the visible window so that we
+    // can detect a day boundary at the very first visible row.
+    let mut prev_date: Option<NaiveDate> = if start > 0 {
+        Some(hourly[start - 1].datetime.date())
+    } else {
+        None
+    };
+
+    let mut rows: Vec<Row> = Vec::with_capacity(end - start + 4); // +4 for possible separators
+
+    for (i, hour) in hourly[start..end].iter().enumerate() {
+        let idx = i + start;
+        let is_selected = idx == selected_index;
+        let is_striped = idx % 2 == 1;
+        let is_current = hour.datetime == current_hour;
+        let current_date = hour.datetime.date();
+
+        // Insert a day-boundary separator whenever the date changes.
+        if prev_date.map_or(false, |d| d != current_date) {
+            rows.push(make_separator(current_date));
+        }
+        prev_date = Some(current_date);
+
+        let clients_str: String = {
+            let mut c: Vec<&str> = hour.clients.iter().map(String::as_str).collect();
+            c.sort();
+            c.join(", ")
+        };
+
+        // Format the hour bucket as HH:00 (very_narrow / narrow) or MM/DD HH:00 (normal).
+        // Using literal ":00" makes it unambiguous that this is an hour bucket, not a
+        // specific minute.  Chrono treats non-% characters as literals, so "%H:00" and
+        // "%m/%d %H:00" both work as expected.
+        let date_str: String = if is_very_narrow || is_narrow {
+            hour.datetime.format("%H:00").to_string()
+        } else {
+            hour.datetime.format("%m/%d %H:00").to_string()
+        };
+
+        let date_style = if is_current {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else if !is_very_narrow && !is_narrow {
+            // Normal mode: bold all date cells for readability at wider widths.
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        let cells: Vec<Cell> = if is_very_narrow {
+            vec![
+                Cell::from(date_str).style(date_style),
+                Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
+            ]
+        } else if is_narrow {
+            let turn_str = if hour.turn_count > 0 {
+                hour.turn_count.to_string()
             } else {
-                let turn_str = if hour.turn_count > 0 {
-                    hour.turn_count.to_string()
-                } else {
-                    "\u{2014}".to_string()
-                };
-                vec![
-                    Cell::from(hour.datetime.format("%Y-%m-%d %H:%M").to_string()).style(
-                        if is_current {
-                            Style::default()
-                                .fg(Color::Yellow)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        },
-                    ),
-                    Cell::from(clients_str),
-                    Cell::from(turn_str),
-                    Cell::from(hour.message_count.to_string()),
-                    Cell::from(format_tokens(hour.tokens.input))
-                        .style(Style::default().fg(Color::Rgb(100, 200, 100))),
-                    Cell::from(format_tokens(hour.tokens.output))
-                        .style(Style::default().fg(Color::Rgb(200, 100, 100))),
-                    Cell::from(format_tokens(hour.tokens.cache_read))
-                        .style(Style::default().fg(Color::Rgb(100, 150, 200))),
-                    Cell::from(format_tokens(hour.tokens.cache_write))
-                        .style(Style::default().fg(Color::Rgb(200, 150, 100))),
-                    Cell::from(format_cache_hit_rate(
-                        hour.tokens.cache_read,
-                        hour.tokens.input,
-                        hour.tokens.cache_write,
-                    ))
-                    .style(Style::default().fg(Color::Cyan)),
-                    Cell::from(format_tokens(hour.tokens.total())),
-                    Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
-                    Cell::from(format_cost_per_million(hour.cost, hour.tokens.total()))
-                        .style(Style::default().fg(Color::Rgb(150, 200, 150))),
-                ]
+                "\u{2014}".to_string()
             };
-
-            let row_style = if is_selected {
-                Style::default().bg(theme_selection)
-            } else if is_current {
-                Style::default().bg(Color::Rgb(28, 42, 34))
-            } else if is_striped {
-                Style::default().bg(Color::Rgb(20, 24, 30))
+            vec![
+                Cell::from(date_str).style(date_style),
+                Cell::from(clients_str),
+                Cell::from(turn_str),
+                Cell::from(hour.message_count.to_string()),
+                Cell::from(format_tokens(hour.tokens.total())),
+                Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
+            ]
+        } else {
+            let turn_str = if hour.turn_count > 0 {
+                hour.turn_count.to_string()
             } else {
-                Style::default()
+                "\u{2014}".to_string()
             };
+            vec![
+                Cell::from(date_str).style(date_style),
+                Cell::from(clients_str),
+                Cell::from(turn_str),
+                Cell::from(hour.message_count.to_string()),
+                Cell::from(format_tokens(hour.tokens.input))
+                    .style(Style::default().fg(Color::Rgb(100, 200, 100))),
+                Cell::from(format_tokens(hour.tokens.output))
+                    .style(Style::default().fg(Color::Rgb(200, 100, 100))),
+                Cell::from(format_tokens(hour.tokens.cache_read))
+                    .style(Style::default().fg(Color::Rgb(100, 150, 200))),
+                Cell::from(format_tokens(hour.tokens.cache_write))
+                    .style(Style::default().fg(Color::Rgb(200, 150, 100))),
+                Cell::from(format_cache_hit_rate(
+                    hour.tokens.cache_read,
+                    hour.tokens.input,
+                    hour.tokens.cache_write,
+                ))
+                .style(Style::default().fg(Color::Cyan)),
+                Cell::from(format_tokens(hour.tokens.total())),
+                Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
+                Cell::from(format_cost_per_million(hour.cost, hour.tokens.total()))
+                    .style(Style::default().fg(Color::Rgb(150, 200, 150))),
+            ]
+        };
 
-            Row::new(cells).style(row_style).height(1)
-        })
-        .collect();
+        let row_style = if is_selected {
+            Style::default().bg(theme_selection)
+        } else if is_current {
+            Style::default().bg(Color::Rgb(28, 42, 34))
+        } else if is_striped {
+            Style::default().bg(Color::Rgb(20, 24, 30))
+        } else {
+            Style::default()
+        };
 
+        rows.push(Row::new(cells).style(row_style).height(1));
+    }
+
+    // Column widths.
+    //
+    // very_narrow (<60 cols):  Date 35 % + Cost 65 %
+    //   Previously Date was 60 % — that left almost no room for Cost.  Shrinking
+    //   it to 35 % (5-char "HH:00") gives Cost the majority of the line.
+    //
+    // narrow (<80 cols):  Date 12 % — down from 25 %.  The freed 13 % goes to
+    //   Source (20→33 %) so client names have more room.
+    //
+    // normal (≥80 cols): Date Length(12) — down from Length(18).  The freed
+    //   6 characters go to Source (14→20) for longer session names.
     let widths = if is_very_narrow {
-        vec![Constraint::Percentage(60), Constraint::Percentage(40)]
+        vec![Constraint::Percentage(35), Constraint::Percentage(65)]
     } else if is_narrow {
         vec![
-            Constraint::Percentage(25),
-            Constraint::Percentage(20),
+            Constraint::Percentage(12),
+            Constraint::Percentage(33),
             Constraint::Percentage(12),
             Constraint::Percentage(13),
             Constraint::Percentage(15),
@@ -220,8 +265,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         ]
     } else {
         vec![
-            Constraint::Length(18),
-            Constraint::Length(14),
+            Constraint::Length(12),
+            Constraint::Length(20),
             Constraint::Length(6),
             Constraint::Length(6),
             Constraint::Length(10),
