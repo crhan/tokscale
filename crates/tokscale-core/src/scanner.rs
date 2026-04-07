@@ -1071,9 +1071,12 @@ mod tests {
         setup_mock_claude_dir(home);
         setup_mock_gemini_dir(home);
 
-        let result = scan_all_clients(
+        // use_env_roots=false to avoid interference from TOKSCALE_EXTRA_DIRS
+        // set by parallel tests
+        let result = scan_all_clients_with_env_strategy(
             home.to_str().unwrap(),
             &["claude".to_string(), "gemini".to_string()],
+            false,
         );
 
         assert_eq!(result.get(ClientId::Claude).len(), 1);
