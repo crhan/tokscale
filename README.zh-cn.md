@@ -284,64 +284,31 @@ tokscale models --json > report.json   # 保存到文件
 
 ### 按平台筛选
 
+使用 `--client`（短选项 `-c`）将报告范围限定为一个或多个客户端。该选项可重复使用，支持逗号分隔的值，并适用于所有报告命令：
+
 ```bash
 # 仅显示 OpenCode 使用量
-tokscale --opencode
+tokscale --client opencode
 
-# 仅显示 Claude Code 使用量
-tokscale --claude
+# 逗号分隔：同时筛选多个客户端
+tokscale --client opencode,claude
 
-# 仅显示 Codex CLI 使用量
-tokscale --codex
+# 重复使用：效果相同（与 shell 别名搭配使用很方便）
+tokscale -c opencode -c claude
 
-# 仅显示 OpenClaw 使用量
-tokscale --openclaw
+# Cursor IDE 需要先运行 `tokscale cursor login`
+tokscale --client cursor
 
-# 仅显示 Pi 使用量
-tokscale --pi
+# Synthetic（synthetic.new）从其他 agent 会话中检测
+tokscale --client synthetic
 
-# 仅显示 Gemini CLI 使用量
-tokscale --gemini
-
-# 仅显示 Cursor IDE 使用量（需要先 `tokscale cursor login`）
-tokscale --cursor
-
-# 仅显示 Amp 使用量
-tokscale --amp
-
-# 仅显示 Droid 使用量
-tokscale --droid
-
-# 仅显示 Hermes Agent 使用量
-tokscale --hermes
-
-# 仅显示 Kimi CLI 使用量
-tokscale --kimi
-
-# 仅显示 Qwen CLI 使用量
-tokscale --qwen
-
-# 仅显示 Roo Code 使用量
-tokscale --roocode
-
-# 仅显示 Kilo 使用量
-tokscale --kilocode
-
-# 仅显示 Mux 使用量
-tokscale --mux
-
-# 仅显示 Kilo CLI 使用量
-tokscale --kilo
-
-# 仅显示 Crush 使用量
-tokscale --crush
-
-# 仅显示 Synthetic (synthetic.new) 使用量
-tokscale --synthetic
-
-# 组合筛选
-tokscale --opencode --claude
+# 与其他筛选条件组合
+tokscale --client opencode,claude --week --json
 ```
+
+可用值：`opencode`、`claude`、`codex`、`copilot`、`gemini`、`cursor`、`amp`、`droid`、`openclaw`、`hermes`、`pi`、`kimi`、`qwen`、`roocode`、`kilocode`、`kilo`、`mux`、`crush`、`synthetic`。
+
+> **弃用通知**：旧的单客户端选项（`--opencode`、`--claude`、`--codex` 等）出于向后兼容仍然可用，但已从 `--help` 中隐藏，将在下一个主要版本中移除。请尽量迁移到 `--client`。在交互式终端中使用旧选项时会输出一行警告。
 
 ### 日期筛选
 
@@ -360,7 +327,7 @@ tokscale --since 2024-01-01 --until 2024-12-31
 tokscale --year 2024
 
 # 与其他选项组合
-tokscale models --week --claude --json
+tokscale models --week --client claude --json
 tokscale monthly --month --benchmark
 ```
 
@@ -420,7 +387,7 @@ tokscale whoami
 tokscale submit
 
 # 带筛选提交
-tokscale submit --opencode --claude --since 2024-01-01
+tokscale submit --client opencode,claude --since 2024-01-01
 
 # 预览将要提交的内容（试运行）
 tokscale submit --dry-run
@@ -487,7 +454,8 @@ Tokscale 将设置存储在 `~/.config/tokscale/settings.json`：
 ```json
 {
   "colorPalette": "blue",
-  "includeUnusedModels": false
+  "includeUnusedModels": false,
+  "defaultClients": ["opencode", "claude"]
 }
 ```
 
@@ -498,6 +466,7 @@ Tokscale 将设置存储在 `~/.config/tokscale/settings.json`：
 | `autoRefreshEnabled` | boolean | `false` | 在 TUI 中启用自动刷新 |
 | `autoRefreshMs` | number | `60000` | 自动刷新间隔（30000-3600000ms） |
 | `nativeTimeoutMs` | number | `300000` | 原生子进程处理最大时间（5000-3600000ms） |
+| `defaultClients` | string[] | `[]` | 未传递 `--client/-c` 选项时应用的客户端筛选。接受与 `--client` 相同的 ID（例如 `["opencode", "claude", "synthetic"]`）。未知 ID 会被静默丢弃。命令行选项会完全覆盖此列表 — 不会合并。 |
 
 ### 环境变量
 
@@ -786,7 +755,7 @@ tokscale graph --since 2024-01-01 --until 2024-12-31
 tokscale graph --year 2024
 
 # 按平台筛选
-tokscale graph --opencode --claude
+tokscale graph --client opencode,claude
 
 # 显示处理时间基准
 tokscale graph --output data.json --benchmark

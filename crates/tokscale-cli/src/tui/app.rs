@@ -8,6 +8,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::layout::Rect;
 use tokscale_core::ClientId;
 
+use crate::ClientFilter;
+
 use ratatui::style::Color;
 
 use super::data::{AgentUsage, DailyUsage, DataLoader, HourlyUsage, ModelUsage, UsageData};
@@ -142,8 +144,13 @@ pub struct App {
     pub data: UsageData,
     pub data_loader: DataLoader,
 
-    pub enabled_clients: Rc<RefCell<HashSet<ClientId>>>,
-    pub include_synthetic: Rc<RefCell<bool>>,
+    /// Set of clients currently selected in the source picker. The
+    /// `Synthetic` variant is part of the same set so dialog code can
+    /// uniformly toggle/inspect every option without a separate boolean.
+    /// Code that talks to `tokscale_core` (which still expects a
+    /// `Vec<ClientId>` plus a `bool include_synthetic`) projects this set
+    /// at the boundary via `App::scan_clients` and `App::include_synthetic`.
+    pub enabled_clients: Rc<RefCell<HashSet<ClientFilter>>>,
     pub group_by: Rc<RefCell<tokscale_core::GroupBy>>,
     pub sort_field: SortField,
     pub sort_direction: SortDirection,
@@ -193,22 +200,23 @@ impl App {
             .unwrap_or_else(|_| settings.theme_name());
         let theme = Theme::from_name(theme_name);
 
-        let mut enabled_clients = HashSet::new();
-        let mut include_synthetic = false;
-
-        if let Some(ref cli_clients) = config.clients {
-            for client_str in cli_clients {
-                if client_str.eq_ignore_ascii_case("synthetic") {
-                    include_synthetic = true;
-                } else if let Some(client) = ClientId::from_str(client_str) {
-                    enabled_clients.insert(client);
-                }
-            }
+        let enabled_clients: HashSet<ClientFilter> = if let Some(ref cli_clients) = config.clients {
+            // CLI-provided filter list. Each entry is the canonical
+            // lowercase id (`opencode`, `claude`, ..., `synthetic`).
+            // Unknown ids are dropped silently; the CLI parser already
+            // validated against `ClientFilter` so this lookup should be
+            // total in practice.
+            cli_clients
+                .iter()
+                .filter_map(|s| ClientFilter::from_filter_str(&s.to_lowercase()))
+                .collect()
         } else {
-            for client in ClientId::iter() {
-                enabled_clients.insert(client);
-            }
-        }
+            // No filter → use the canonical default set (every real
+            // client, Synthetic opt-in only). MUST stay in sync with
+            // `run_warm_tui_cache()` so a fresh cache warm produces a
+            // fresh hit on the next no-filter launch.
+            ClientFilter::default_set()
+        };
 
         let auto_refresh_interval = if config.refresh > 0 {
             Duration::from_secs(config.refresh)
@@ -240,7 +248,6 @@ impl App {
             data,
             data_loader,
             enabled_clients: Rc::new(RefCell::new(enabled_clients)),
-            include_synthetic: Rc::new(RefCell::new(include_synthetic)),
             group_by: Rc::new(RefCell::new(tokscale_core::GroupBy::Model)),
             sort_field: SortField::Cost,
             sort_direction: SortDirection::Descending,
@@ -771,10 +778,36 @@ impl App {
     fn open_client_picker(&mut self) {
         let dialog = ClientPickerDialog::new(
             self.enabled_clients.clone(),
-            self.include_synthetic.clone(),
             self.dialog_needs_reload.clone(),
         );
         self.dialog_stack.show(Box::new(dialog));
+    }
+
+    /// Project the unified `HashSet<ClientFilter>` into the
+    /// `Vec<ClientId>` shape that `tokscale_core` scanners still consume.
+    /// `ClientFilter::Synthetic` does not have a `ClientId` and is
+    /// excluded from this projection — use [`Self::include_synthetic`]
+    /// for that signal.
+    pub fn scan_clients(&self) -> Vec<ClientId> {
+        let mut out: Vec<ClientId> = self
+            .enabled_clients
+            .borrow()
+            .iter()
+            .filter_map(|f| f.to_client_id())
+            .collect();
+        // Stable order for downstream cache key + log output. Sort by the
+        // declaration index in ClientId::ALL so the projection mirrors
+        // the canonical ordering used elsewhere.
+        out.sort_by_key(|c| *c as usize);
+        out
+    }
+
+    /// Whether the user has Synthetic enabled. Boundary helper for code
+    /// paths that still take a separate `bool include_synthetic` argument.
+    pub fn include_synthetic(&self) -> bool {
+        self.enabled_clients
+            .borrow()
+            .contains(&ClientFilter::Synthetic)
     }
 
     fn open_group_by_picker(&mut self) {
@@ -1319,6 +1352,27 @@ mod tests {
             initial_tab: None,
         };
         App::new_with_cached_data(config, None).unwrap()
+    }
+
+    #[test]
+    fn test_app_no_filter_default_matches_default_set() {
+        // Regression for an Oracle-flagged HIGH bug: the no-filter TUI
+        // default and the `submit` warm-cache filter set drifted apart,
+        // making every TUI launch after submit a stale-cache reuse
+        // instead of a fresh hit. Both paths now go through
+        // `ClientFilter::default_set()`; assert it stays that way.
+        let app = make_app();
+        let actual = app.enabled_clients.borrow().clone();
+        let expected = ClientFilter::default_set();
+        assert_eq!(
+            actual, expected,
+            "no-filter App default drifted from ClientFilter::default_set() — \
+             warm cache and TUI launch will mismatch"
+        );
+        assert!(
+            !actual.contains(&ClientFilter::Synthetic),
+            "no-filter default must not include Synthetic (opt-in only)"
+        );
     }
 
     fn make_app_with_models(n: usize) -> App {

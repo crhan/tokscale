@@ -287,67 +287,31 @@ Press `g` in the TUI or use `--group-by` in `--light`/`--json` mode to control h
 
 ### Filtering by Platform
 
+Use `--client` (short `-c`) to scope reports to one or more clients. The flag is repeatable, accepts comma-separated values, and works with every report command:
+
 ```bash
 # Show only OpenCode usage
-tokscale --opencode
+tokscale --client opencode
 
-# Show only Claude Code usage
-tokscale --claude
+# Comma-separated: combine multiple clients
+tokscale --client opencode,claude
 
-# Show only Codex CLI usage
-tokscale --codex
+# Repeated: same effect, useful with shell aliases
+tokscale -c opencode -c claude
 
-# Show only Copilot CLI usage
-tokscale --copilot
+# Cursor IDE requires `tokscale cursor login` first
+tokscale --client cursor
 
-# Show only OpenClaw usage
-tokscale --openclaw
+# Synthetic (synthetic.new) is detected from other agent sessions
+tokscale --client synthetic
 
-# Show only Pi usage
-tokscale --pi
-
-# Show only Gemini CLI usage
-tokscale --gemini
-
-# Show only Cursor IDE usage (requires `tokscale cursor login` first)
-tokscale --cursor
-
-# Show only Amp usage
-tokscale --amp
-
-# Show only Droid usage
-tokscale --droid
-
-# Show only Hermes Agent usage
-tokscale --hermes
-
-# Show only Kimi CLI usage
-tokscale --kimi
-
-# Show only Qwen CLI usage
-tokscale --qwen
-
-# Show only Roo Code usage
-tokscale --roocode
-
-# Show only Kilo usage
-tokscale --kilocode
-
-# Show only Mux usage
-tokscale --mux
-
-# Show only Kilo CLI usage
-tokscale --kilo
-
-# Show only Crush usage
-tokscale --crush
-
-# Show only Synthetic (synthetic.new) usage
-tokscale --synthetic
-
-# Combine filters
-tokscale --opencode --claude
+# Combine with other filters
+tokscale --client opencode,claude --week --json
 ```
+
+Possible values: `opencode`, `claude`, `codex`, `copilot`, `gemini`, `cursor`, `amp`, `droid`, `openclaw`, `hermes`, `pi`, `kimi`, `qwen`, `roocode`, `kilocode`, `kilo`, `mux`, `crush`, `synthetic`.
+
+> **Deprecation notice**: The legacy single-client flags (`--opencode`, `--claude`, `--codex`, etc.) still work for backward compatibility but are hidden from `--help` and will be removed in the next major release. Migrate to `--client` whenever possible. Running tokscale in an interactive terminal will print a one-line warning when a legacy flag is used.
 
 ### Date Filtering
 
@@ -366,7 +330,7 @@ tokscale --since 2024-01-01 --until 2024-12-31
 tokscale --year 2024
 
 # Combine with other options
-tokscale models --week --claude --json
+tokscale models --week --client claude --json
 tokscale monthly --month --benchmark
 ```
 
@@ -426,7 +390,7 @@ tokscale whoami
 tokscale submit
 
 # Submit with filters
-tokscale submit --opencode --claude --since 2024-01-01
+tokscale submit --client opencode,claude --since 2024-01-01
 
 # Preview what would be submitted (dry run)
 tokscale submit --dry-run
@@ -494,6 +458,7 @@ Tokscale stores settings in `~/.config/tokscale/settings.json`:
 {
   "colorPalette": "blue",
   "includeUnusedModels": false,
+  "defaultClients": ["opencode", "claude"],
   "scanner": {
     "extraScanPaths": {
       "codex": [
@@ -512,9 +477,12 @@ Tokscale stores settings in `~/.config/tokscale/settings.json`:
 | `autoRefreshEnabled` | boolean | `false` | Enable auto-refresh in TUI |
 | `autoRefreshMs` | number | `60000` | Auto-refresh interval (30000-3600000ms) |
 | `nativeTimeoutMs` | number | `300000` | Maximum time for native subprocess processing (5000-3600000ms) |
+| `defaultClients` | string[] | `[]` | Client filter applied when no `--client/-c` flag is passed. Accepts the same ids as `--client` (e.g. `["opencode", "claude", "synthetic"]`). Unknown ids are silently dropped. CLI flags always override this list completely — no merging. |
 | `scanner.extraScanPaths` | object | `{}` | Additional per-client scan roots for sessions outside Tokscale's default home-root locations |
 
 Use `scanner.extraScanPaths` for persistent extra roots such as project-level `.codex` directories or imported Gemini/OpenClaw histories. Tokscale merges these paths with the default scan roots on every run and deduplicates overlapping roots by canonical path.
+
+Use `defaultClients` to pin a personal default — for example, set it to `["opencode", "claude"]` if those are the only clients you use, and `tokscale` (with no flags) will scope every report to them automatically. Pass `--client` on the command line to override for a single run.
 
 ### Environment Variables
 
@@ -807,7 +775,7 @@ tokscale graph --since 2024-01-01 --until 2024-12-31
 tokscale graph --year 2024
 
 # Filter by platform
-tokscale graph --opencode --claude
+tokscale graph --client opencode,claude
 
 # Show processing time benchmark
 tokscale graph --output data.json --benchmark
