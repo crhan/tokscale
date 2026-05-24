@@ -343,6 +343,7 @@ pub fn parse_claude_file_with_cache(
     // Tracks whether the previous entry was a user message,
     // so the next assistant message can be marked as a turn start.
     let mut pending_turn_start = false;
+    let mut pending_request_start_timestamp_ms: Option<i64> = None;
     // Sidechain detection state (resolved lazily on first parseable entry)
     let mut sidechain_agent: Option<String> = None;
     let mut sidechain_detected = false;
@@ -381,6 +382,11 @@ pub fn parse_claude_file_with_cache(
             }
 
             if entry.entry_type == "user" {
+                if let Some(timestamp_ms) =
+                    parse_claude_entry_timestamp(entry.timestamp.as_deref())
+                {
+                    pending_request_start_timestamp_ms = Some(timestamp_ms);
+                }
                 // Distinguish real human input from tool results / system messages.
                 // Tool results have content as a JSON array (e.g. [{"type":"tool_result",...}]).
                 // System messages have XML-tagged content (e.g. <local-command-stdout>).
@@ -418,18 +424,32 @@ pub fn parse_claude_file_with_cache(
                     (Some(msg_id), Some(req_id)) => {
                         let hash = format!("{}:{}", msg_id, req_id);
                         if let Some(&existing_idx) = processed_hashes.get(&hash) {
-                            // Per-field max merge: each token field is updated independently
-                            {
-                                let t = &mut messages[existing_idx].tokens;
-                                t.input = t.input.max(usage.input_tokens.unwrap_or(0).max(0));
-                                t.output = t.output.max(usage.output_tokens.unwrap_or(0).max(0));
-                                t.cache_read = t
-                                    .cache_read
-                                    .max(usage.cache_read_input_tokens.unwrap_or(0).max(0));
-                                t.cache_write = t
-                                    .cache_write
-                                    .max(usage.cache_creation_input_tokens.unwrap_or(0).max(0));
+                            merge_claude_duplicate(
+                                &mut messages[existing_idx],
+                                &usage,
+                                parse_claude_entry_timestamp(entry.timestamp.as_deref()),
+                                pending_request_start_timestamp_ms,
+                            );
+                            if let Some(choice) = duplicate_provider_choice {
+                                update_claude_provider_id(
+                                    &mut messages[existing_idx].provider_id,
+                                    &mut provider_confidences[existing_idx],
+                                    choice,
+                                );
                             }
+                            continue;
+                        }
+                        Some(hash)
+                    }
+                    (Some(msg_id), None) => {
+                        let hash = format!("message:{}", msg_id);
+                        if let Some(&existing_idx) = processed_hashes.get(&hash) {
+                            merge_claude_duplicate(
+                                &mut messages[existing_idx],
+                                &usage,
+                                parse_claude_entry_timestamp(entry.timestamp.as_deref()),
+                                pending_request_start_timestamp_ms,
+                            );
                             if let Some(choice) = duplicate_provider_choice {
                                 update_claude_provider_id(
                                     &mut messages[existing_idx].provider_id,
@@ -457,11 +477,10 @@ pub fn parse_claude_file_with_cache(
                 );
                 let provider_confidence = provider_choice.confidence;
 
-                let timestamp = entry
-                    .timestamp
-                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(&ts).ok())
-                    .map(|dt| dt.timestamp_millis())
-                    .unwrap_or(fallback_timestamp);
+                let parsed_timestamp = parse_claude_entry_timestamp(entry.timestamp.as_deref());
+                let timestamp = parsed_timestamp.unwrap_or(fallback_timestamp);
+                let duration_ms =
+                    duration_between_ms(pending_request_start_timestamp_ms, parsed_timestamp);
 
                 // Insert dedup index only after all checks pass, right before push
                 let dedup_key = pending_hash.inspect(|hash| {
@@ -484,6 +503,7 @@ pub fn parse_claude_file_with_cache(
                     0.0,
                     dedup_key,
                 );
+                unified.duration_ms = duration_ms;
                 unified.agent = sidechain_agent.clone();
                 unified.set_workspace(workspace_key.clone(), workspace_label.clone());
                 // Mark the first assistant response after a user message as a turn start
@@ -493,6 +513,13 @@ pub fn parse_claude_file_with_cache(
                 }
                 messages.push(unified);
                 provider_confidences.push(provider_confidence);
+                // Consume the pending request-start timestamp so a back-to-back
+                // assistant message with no intervening user entry doesn't reuse
+                // it and report an inflated duration. Streaming duplicates of
+                // this same message have already been captured in the dedup map
+                // above, so they merge via merge_claude_duplicate without needing
+                // the global pending value again.
+                pending_request_start_timestamp_ms = None;
                 handled = true;
             }
         }
@@ -543,6 +570,56 @@ fn claude_workspace_from_path(path: &Path) -> (Option<String>, Option<String>) {
     }
 
     (None, None)
+}
+
+fn parse_claude_entry_timestamp(timestamp: Option<&str>) -> Option<i64> {
+    timestamp
+        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn duration_between_ms(start_ms: Option<i64>, end_ms: Option<i64>) -> Option<i64> {
+    let duration = end_ms?.saturating_sub(start_ms?);
+    (duration > 0).then_some(duration)
+}
+
+fn merge_claude_duplicate(
+    existing: &mut UnifiedMessage,
+    usage: &ClaudeUsage,
+    parsed_timestamp: Option<i64>,
+    request_start_timestamp_ms: Option<i64>,
+) {
+    // Per-field max merge: each token field is updated independently.
+    let t = &mut existing.tokens;
+    t.input = t.input.max(usage.input_tokens.unwrap_or(0).max(0));
+    t.output = t.output.max(usage.output_tokens.unwrap_or(0).max(0));
+    t.cache_read = t
+        .cache_read
+        .max(usage.cache_read_input_tokens.unwrap_or(0).max(0));
+    t.cache_write = t
+        .cache_write
+        .max(usage.cache_creation_input_tokens.unwrap_or(0).max(0));
+
+    if let Some(timestamp_ms) = parsed_timestamp {
+        if timestamp_ms >= existing.timestamp {
+            // Recover the original request-start timestamp from the existing
+            // message's recorded duration. The parent loop clears
+            // `pending_request_start_timestamp_ms` after the first chunk of a
+            // message commits (so a NEW message with no preceding user doesn't
+            // inflate by reusing a stale start), which would otherwise blank
+            // out streaming duplicates' duration. Recovering from
+            // `existing.timestamp - existing.duration_ms` keeps the duration
+            // honest for late chunks of the same logical message.
+            let recovered_start = existing
+                .duration_ms
+                .map(|d| existing.timestamp - d)
+                .or(request_start_timestamp_ms);
+            existing.set_timestamp(timestamp_ms);
+            if let Some(new_duration) = duration_between_ms(recovered_start, Some(timestamp_ms)) {
+                existing.duration_ms = Some(new_duration);
+            }
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1109,6 +1186,52 @@ mod tests {
             messages.len(),
             2,
             "Different requestId should not be deduplicated"
+        );
+    }
+
+    #[test]
+    fn test_deduplication_uses_message_id_without_request_id_and_keeps_final_duration() {
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Hello"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","message":{"id":"msg_stream","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":25}}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:03.500Z","message":{"id":"msg_stream","model":"claude-3-5-sonnet","usage":{"input_tokens":10,"output_tokens":250}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tokens.output, 250);
+        assert_eq!(messages[0].timestamp, 1_733_047_203_500);
+        assert_eq!(messages[0].duration_ms, Some(3500));
+        assert_eq!(
+            messages[0].dedup_key.as_deref(),
+            Some("message:msg_stream")
+        );
+    }
+
+    #[test]
+    fn test_pending_request_start_is_cleared_between_assistant_messages() {
+        // Regression: previously, the user-entry timestamp was set into
+        // `pending_request_start_timestamp_ms` and never cleared after the
+        // first assistant message consumed it. A subsequent assistant message
+        // with no intervening user entry would then reuse the stale start
+        // timestamp and report a wildly inflated duration.
+        let content = r#"{"type":"user","timestamp":"2024-12-01T10:00:00.000Z","message":{"content":"Hello"}}
+{"type":"assistant","timestamp":"2024-12-01T10:00:01.000Z","requestId":"req_001","message":{"id":"msg_001","model":"claude-3-5-sonnet","usage":{"input_tokens":100,"output_tokens":50}}}
+{"type":"assistant","timestamp":"2024-12-01T10:01:30.000Z","requestId":"req_002","message":{"id":"msg_002","model":"claude-3-5-sonnet","usage":{"input_tokens":200,"output_tokens":80}}}"#;
+
+        let file = create_test_file(content);
+        let messages = parse_claude_file(file.path());
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].duration_ms,
+            Some(1_000),
+            "first assistant should report duration vs the user entry (1s)"
+        );
+        assert_eq!(
+            messages[1].duration_ms, None,
+            "second assistant has no preceding user entry; duration must NOT \
+             reuse the stale pending_request_start_timestamp_ms"
         );
     }
 
