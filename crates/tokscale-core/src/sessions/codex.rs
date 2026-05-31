@@ -39,6 +39,11 @@ pub struct CodexPayload {
     pub model_provider: Option<String>,
     /// Agent name from session_meta
     pub agent_nickname: Option<String>,
+    /// Free-text body of an `event_msg` `user_message` payload. Used to detect
+    /// human turn boundaries: real human input is plain text, whereas
+    /// system-injected context (`<environment_context>`, `<system-reminder>`,
+    /// `<user_instructions>`, …) begins with `<`.
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +171,11 @@ pub(crate) struct CodexParseState {
     pub forked_child_waiting_for_turn_context: bool,
     pub forked_child_inherited_baseline: Option<CodexTotals>,
     pub forked_child_inherited_reported_total: Option<i64>,
+    /// Set when a human `user_message` event is seen; consumed by the next
+    /// token_count-derived message to mark it as a turn start. `#[serde(default)]`
+    /// keeps a pending turn alive across incremental re-parses of appended chunks.
+    #[serde(default)]
+    pub pending_turn_start: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +346,26 @@ fn parse_codex_reader<R: BufRead>(
                     handled = true;
                 }
 
+                // A human `user_message` event starts a new turn. The event
+                // itself carries no tokens, so we defer the flag to the next
+                // token_count-derived message (the assistant's reply). This
+                // counts `codex exec` one-shots too: they are headless but still
+                // carry a real human prompt, so each is one turn. Only
+                // system-injected messages (leading `<`, e.g.
+                // <environment_context>, <system-reminder>) are excluded as
+                // non-human input. Forked-child replays of the parent prompt
+                // arrive before turn_context and are skipped by the
+                // `forked_child_waiting_for_turn_context` branch above, so they
+                // never reach here.
+                if entry.entry_type == "event_msg"
+                    && payload.payload_type.as_deref() == Some("user_message")
+                {
+                    if codex_message_is_human_turn(payload.message.as_deref()) {
+                        state.pending_turn_start = true;
+                    }
+                    handled = true;
+                }
+
                 // Process token_count events
                 if is_token_count {
                     let info = match payload.info {
@@ -456,6 +486,13 @@ fn parse_codex_reader<R: BufRead>(
                         agent,
                     );
                     message.duration_ms = duration_ms;
+                    // Apply a deferred human-turn marker from a preceding
+                    // user_message to this assistant reply — the first
+                    // token-bearing message after the human input.
+                    if state.pending_turn_start {
+                        message.is_turn_start = true;
+                        state.pending_turn_start = false;
+                    }
                     if parsed_timestamp.is_some() {
                         if let Some(model) = model.as_deref() {
                             set_codex_dedup_key(&mut message, model);
@@ -861,6 +898,21 @@ fn extract_timestamp_from_value(value: &Value) -> Option<i64> {
         .or_else(|| value.get("created_at"))
         .or_else(|| value.get("data").and_then(|data| data.get("timestamp")))
         .and_then(parse_timestamp_value)
+}
+
+/// Returns true when a Codex `user_message` payload represents real human input
+/// rather than system-injected context. Codex stores the body as a plain string
+/// in `payload.message`; system-injected messages (`<environment_context>`,
+/// `<system-reminder>`, `<user_instructions>`, …) begin with `<` after trimming,
+/// mirroring the ClaudeCode heuristic. Validated against real session data: the
+/// leading-`<` test cleanly separates human turns from injected context, whereas
+/// the `kind` field does not (both human and system bodies appear as
+/// `kind:"plain"` and with no `kind` at all).
+fn codex_message_is_human_turn(message: Option<&str>) -> bool {
+    match message {
+        Some(text) => !text.trim_start().starts_with('<'),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -1767,5 +1819,119 @@ mod tests {
         assert!(!parsed.unresolved_model_events);
         assert_eq!(parsed.messages.len(), 1);
         assert_eq!(parsed.messages[0].model_id, "gpt-5.5");
+    }
+
+    #[test]
+    fn test_user_message_marks_next_token_count_as_turn_start() {
+        let content = [
+            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.2"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"continue please"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3},"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":4,"output_tokens":6},"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}"#,
+        ]
+        .join("\n");
+        let file = create_test_file(&content);
+
+        let messages = parse_codex_file(file.path());
+
+        assert_eq!(messages.len(), 2);
+        assert!(
+            messages[0].is_turn_start,
+            "first reply after a human user_message is a turn start"
+        );
+        assert!(
+            !messages[1].is_turn_start,
+            "a later reply with no new user_message is not a turn start"
+        );
+    }
+
+    #[test]
+    fn test_xml_user_message_does_not_mark_turn_start() {
+        let content = [
+            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.2"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"\n<environment_context>\n  <cwd>/tmp</cwd>\n</environment_context>"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}"#,
+        ]
+        .join("\n");
+        let file = create_test_file(&content);
+
+        let messages = parse_codex_file(file.path());
+
+        assert_eq!(messages.len(), 1);
+        assert!(
+            !messages[0].is_turn_start,
+            "a system-injected <...> message is not a human turn"
+        );
+    }
+
+    #[test]
+    fn test_exec_user_message_still_marks_turn_start() {
+        // A `codex exec` one-shot is headless but still carries a real human
+        // prompt, so it counts as exactly one turn (verified against a real
+        // `codex exec` session: 1 user_message -> turn_count 1).
+        let content = [
+            r#"{"timestamp":"2026-01-01T00:00:00Z","type":"session_meta","payload":{"source":"exec"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.2"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"hello"}}"#,
+            // A real `codex exec` interleaves an agent_message between the user
+            // prompt and the token_count; the deferred turn flag must survive it.
+            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"hi"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}"#,
+        ]
+        .join("\n");
+        let file = create_test_file(&content);
+
+        let messages = parse_codex_file(file.path());
+
+        assert_eq!(messages.len(), 1);
+        assert!(
+            messages[0].is_turn_start,
+            "an exec one-shot with a human prompt counts as one turn"
+        );
+        assert_eq!(messages[0].agent.as_deref(), Some("headless"));
+    }
+
+    #[test]
+    fn test_incremental_parse_preserves_pending_turn_start() {
+        let content = [
+            r#"{"timestamp":"2026-01-01T00:00:01Z","type":"turn_context","payload":{"model":"gpt-5.2"}}"#,
+            r#"{"timestamp":"2026-01-01T00:00:02Z","type":"event_msg","payload":{"type":"user_message","message":"hello"}}"#,
+            "",
+        ]
+        .join("\n");
+        let file = create_test_file(&content);
+        let initial_size = file.as_file().metadata().unwrap().len();
+
+        let initial = parse_codex_file_incremental(file.path(), 0, CodexParseState::default());
+        assert!(
+            initial.messages.is_empty(),
+            "no token_count yet, so no message"
+        );
+        assert!(
+            initial.state.pending_turn_start,
+            "a pending turn survives a chunk that ends before the token_count"
+        );
+
+        let appended = format!(
+            "{}\n",
+            r#"{"timestamp":"2026-01-01T00:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3}}}}"#
+        );
+        let mut reopened = file.reopen().unwrap();
+        reopened.seek(SeekFrom::End(0)).unwrap();
+        reopened.write_all(appended.as_bytes()).unwrap();
+        reopened.flush().unwrap();
+
+        let incremental =
+            parse_codex_file_incremental(file.path(), initial_size, initial.state.clone());
+
+        assert_eq!(incremental.messages.len(), 1);
+        assert!(
+            incremental.messages[0].is_turn_start,
+            "the deferred turn applies to the message parsed in the next chunk"
+        );
+        assert!(
+            !incremental.state.pending_turn_start,
+            "the pending flag is consumed once applied"
+        );
     }
 }
