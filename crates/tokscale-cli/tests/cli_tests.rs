@@ -335,7 +335,10 @@ fn cmd_with_home(tmp: &Path) -> Command {
         .env_remove("CODEX_HOME")
         .env_remove("COPILOT_OTEL_FILE_EXPORTER_PATH")
         .env_remove("GOOSE_PATH_ROOT")
-        .env_remove("CODEBUFF_DATA_DIR");
+        .env_remove("CODEBUFF_DATA_DIR")
+        .env_remove("GEMINI_CLI_HOME")
+        .env_remove("HERMES_HOME")
+        .env_remove("TOKSCALE_CONFIG_DIR");
     cmd
 }
 
@@ -368,7 +371,10 @@ fn offline_cmd_with_home(tmp: &Path) -> Command {
         .env_remove("CODEX_HOME")
         .env_remove("COPILOT_OTEL_FILE_EXPORTER_PATH")
         .env_remove("GOOSE_PATH_ROOT")
-        .env_remove("CODEBUFF_DATA_DIR");
+        .env_remove("CODEBUFF_DATA_DIR")
+        .env_remove("GEMINI_CLI_HOME")
+        .env_remove("HERMES_HOME")
+        .env_remove("TOKSCALE_CONFIG_DIR");
     cmd
 }
 
