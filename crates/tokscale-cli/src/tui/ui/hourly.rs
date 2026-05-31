@@ -438,6 +438,36 @@ mod tests {
     }
 
     #[test]
+    fn selected_row_visible_in_single_line_viewport() {
+        // Regression guard for the day-boundary separator bug both cubic and
+        // Codex flagged: when the selected row is the FIRST row of a new day and
+        // the viewport has room for only one line, the separator and the data
+        // row cannot share the budget. The fix drops the separator but still
+        // renders the data row, so the selected row never disappears. The old
+        // `break` form skipped the data row, leaving the highlight invisible
+        // until another keypress (max_visible_items is driven by data rows
+        // actually rendered, so the nav/scroll clamp would not advance).
+        //
+        // Data is newest-first: index 3 == 05/28 23:00 is the first row of the
+        // older day (it needs a separator). Pin the window to it.
+        let mut app = make_app(120);
+        app.scroll_offset = 3;
+        app.selected_index = 3;
+
+        // height 4 → inner height 2 → visible_height = 2 - 1 = 1 (single line):
+        // the separator and the data row cannot both fit on the one line left.
+        let body = render_lines(&mut app, 120, 4).join("\n");
+
+        // The old `break` form bailed here and rendered nothing, so the selected
+        // hour was invisible until another keypress. The fix drops the separator
+        // but still renders the data row.
+        assert!(
+            body.contains("23:00"),
+            "selected row (05/28 23:00) must stay visible in a one-line viewport\n{body}"
+        );
+    }
+
+    #[test]
     fn window_never_overflows_height_and_reports_data_rows() {
         let mut app = make_app(120);
         // Tight height forces the line budget to bite (separators + data rows).
