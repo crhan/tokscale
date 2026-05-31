@@ -900,17 +900,31 @@ fn extract_timestamp_from_value(value: &Value) -> Option<i64> {
         .and_then(parse_timestamp_value)
 }
 
+/// Prefixes Codex prepends to context it injects as `user_message` events.
+/// These are the bodies that must NOT be counted as human turns.
+const CODEX_SYSTEM_INJECTED_PREFIXES: [&str; 3] = [
+    "<environment_context>",
+    "<system-reminder>",
+    "<user_instructions>",
+];
+
 /// Returns true when a Codex `user_message` payload represents real human input
 /// rather than system-injected context. Codex stores the body as a plain string
-/// in `payload.message`; system-injected messages (`<environment_context>`,
-/// `<system-reminder>`, `<user_instructions>`, …) begin with `<` after trimming,
-/// mirroring the ClaudeCode heuristic. Validated against real session data: the
-/// leading-`<` test cleanly separates human turns from injected context, whereas
-/// the `kind` field does not (both human and system bodies appear as
-/// `kind:"plain"` and with no `kind` at all).
+/// in `payload.message`; the harness injects context blocks that open with one of
+/// the known tags in [`CODEX_SYSTEM_INJECTED_PREFIXES`] after trimming. Matching
+/// those specific prefixes — rather than any leading `<` — avoids dropping
+/// legitimate human prompts that happen to start with markup (asking about a
+/// `<div>`, pasting an XML snippet, etc.). The `kind` field can't be used to
+/// distinguish them: both human and injected bodies appear as `kind:"plain"` or
+/// with no `kind` at all.
 fn codex_message_is_human_turn(message: Option<&str>) -> bool {
     match message {
-        Some(text) => !text.trim_start().starts_with('<'),
+        Some(text) => {
+            let trimmed = text.trim_start();
+            !CODEX_SYSTEM_INJECTED_PREFIXES
+                .iter()
+                .any(|prefix| trimmed.starts_with(prefix))
+        }
         None => false,
     }
 }
@@ -920,6 +934,28 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Cursor, Error, ErrorKind, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn codex_human_turn_matches_only_known_system_tags() {
+        // Real human prompts that happen to start with markup must still count.
+        assert!(codex_message_is_human_turn(Some(
+            "how do I center a <div>?"
+        )));
+        assert!(codex_message_is_human_turn(Some("<div>hi</div>")));
+        assert!(codex_message_is_human_turn(Some("  plain question")));
+        // Known system-injected context blocks are not human turns.
+        assert!(!codex_message_is_human_turn(Some(
+            "<environment_context>cwd=/tmp</environment_context>"
+        )));
+        assert!(!codex_message_is_human_turn(Some(
+            "  <system-reminder>be concise</system-reminder>"
+        )));
+        assert!(!codex_message_is_human_turn(Some(
+            "<user_instructions>do X</user_instructions>"
+        )));
+        // A missing body is never a human turn.
+        assert!(!codex_message_is_human_turn(None));
+    }
 
     fn create_test_file(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
