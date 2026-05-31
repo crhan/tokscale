@@ -163,12 +163,14 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         let row_date = hour.datetime.date();
 
         // Separator at the window top (prev_date == None) and at each day
-        // change. Skip when only one line remains: a trailing separator with no
-        // data row beneath it is just noise.
-        if prev_date != Some(row_date) {
-            if lines_used + 1 >= visible_height {
-                break;
-            }
+        // change. When only one line remains it cannot share the line budget
+        // with its data row, so we DROP THE SEPARATOR but still render the data
+        // row. This keeps the selected row visible even when it is the first
+        // row of a new day in a one-line viewport: skipping the data row here
+        // (the old behaviour) made the highlight disappear because
+        // `max_visible_items` is driven by data rows actually rendered, so the
+        // nav/scroll clamp would not advance the window to reveal it.
+        if prev_date != Some(row_date) && lines_used + 1 < visible_height {
             rows.push(
                 Row::new(vec![
                     Cell::from(row_date.format("%m/%d").to_string()).style(sep_style),
@@ -176,8 +178,8 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 .height(1),
             );
             lines_used += 1;
-            prev_date = Some(row_date);
         }
+        prev_date = Some(row_date);
 
         let idx = data_idx;
         let is_selected = idx == selected_index;
@@ -423,6 +425,31 @@ mod tests {
         // The date lives on muted day-boundary separator rows as "%m/%d".
         assert!(body.contains("05/29"), "expected 05/29 separator\n{body}");
         assert!(body.contains("05/28"), "expected 05/28 separator\n{body}");
+    }
+
+    #[test]
+    fn selected_row_visible_in_single_line_viewport() {
+        // Regression guard for the day-boundary separator bug: when the selected
+        // row is the first row of a new day and the viewport has room for only
+        // one line, the separator and the data row cannot share the budget. The
+        // old `break` form rendered nothing here, so the selected hour stayed
+        // invisible until another keypress (max_visible_items is driven by data
+        // rows actually rendered, so the nav/scroll clamp would not advance).
+        // The fix drops the separator but still renders the data row.
+        //
+        // Data is newest-first: index 3 == 05/28 23:00 is the first row of the
+        // older day (it needs a separator). Pin the window to it.
+        let mut app = make_app(120);
+        app.scroll_offset = 3;
+        app.selected_index = 3;
+
+        // height 4 → inner height 2 → visible_height = 2 - 1 = 1 (single line).
+        let body = render_lines(&mut app, 120, 4).join("\n");
+
+        assert!(
+            body.contains("23:00"),
+            "selected row (05/28 23:00) must stay visible in a one-line viewport\n{body}"
+        );
     }
 
     #[test]
