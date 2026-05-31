@@ -325,7 +325,14 @@ fn cmd_with_home(tmp: &Path) -> Command {
         .env("XDG_CONFIG_HOME", tmp.join(".config"))
         .env("XDG_DATA_HOME", tmp.join(".local/share"))
         .env("XDG_CACHE_HOME", tmp.join(".cache"))
-        .env("TOKSCALE_PRICING_CACHE_ONLY", "1");
+        .env("TOKSCALE_PRICING_CACHE_ONLY", "1")
+        // Clear scan-path overrides inherited from the dev's shell, otherwise a
+        // developer who exports e.g. TOKSCALE_EXTRA_DIRS=~/.codex/sessions (for
+        // codefuse mirror tracking) makes the scanner read real session data
+        // and breaks fixture-count assertions. Hermetic on CI either way.
+        .env_remove("TOKSCALE_EXTRA_DIRS")
+        .env_remove("TOKSCALE_HEADLESS_DIR")
+        .env_remove("CODEX_HOME");
     cmd
 }
 

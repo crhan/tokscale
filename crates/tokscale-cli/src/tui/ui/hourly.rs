@@ -173,7 +173,7 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
         if prev_date != Some(row_date) && lines_used + 1 < visible_height {
             rows.push(
                 Row::new(vec![
-                    Cell::from(row_date.format("%m/%d").to_string()).style(sep_style),
+                    Cell::from(row_date.format("%m/%d").to_string()).style(sep_style)
                 ])
                 .height(1),
             );
@@ -209,7 +209,10 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
                 Cell::from(format_cost(hour.cost)).style(Style::default().fg(Color::Green)),
             ]
         } else if is_narrow {
-            let mut cells = vec![Cell::from(time_str).style(time_style), Cell::from(clients_str)];
+            let mut cells = vec![
+                Cell::from(time_str).style(time_style),
+                Cell::from(clients_str),
+            ];
             if has_turn_data {
                 cells.push(Cell::from(turn_cell(hour.turn_count)));
             }
@@ -220,7 +223,10 @@ fn render_table(frame: &mut Frame, app: &mut App, area: Rect) {
             ]);
             cells
         } else {
-            let mut cells = vec![Cell::from(time_str).style(time_style), Cell::from(clients_str)];
+            let mut cells = vec![
+                Cell::from(time_str).style(time_style),
+                Cell::from(clients_str),
+            ];
             if has_turn_data {
                 cells.push(Cell::from(turn_cell(hour.turn_count)));
             }
@@ -407,7 +413,11 @@ mod tests {
             .buffer()
             .content()
             .chunks(width as usize)
-            .map(|row| row.iter().map(|c| c.symbol().to_string()).collect::<String>())
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol().to_string())
+                    .collect::<String>()
+            })
             .collect()
     }
 
