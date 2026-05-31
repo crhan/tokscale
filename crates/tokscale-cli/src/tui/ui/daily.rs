@@ -161,14 +161,15 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                         Cell::from(format_cost(day.cost)).style(Style::default().fg(Color::Green)),
                     ]
                 } else if is_narrow {
-                    let mut cells = vec![Cell::from(day.date.format(date_fmt).to_string())
-                        .style(if is_today {
+                    let mut cells = vec![Cell::from(day.date.format(date_fmt).to_string()).style(
+                        if is_today {
                             Style::default()
                                 .fg(Color::Yellow)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default()
-                        })];
+                        },
+                    )];
                     if has_turn_data {
                         let turn_str = if day.turn_count > 0 {
                             day.turn_count.to_string()
@@ -184,14 +185,15 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
                     ]);
                     cells
                 } else {
-                    let mut cells = vec![Cell::from(day.date.format(date_fmt).to_string())
-                        .style(if is_today {
+                    let mut cells = vec![Cell::from(day.date.format(date_fmt).to_string()).style(
+                        if is_today {
                             Style::default()
                                 .fg(Color::Yellow)
                                 .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().add_modifier(Modifier::BOLD)
-                        })];
+                        },
+                    )];
                     if has_turn_data {
                         let turn_str = if day.turn_count > 0 {
                             day.turn_count.to_string()
@@ -601,7 +603,11 @@ mod tests {
             .buffer()
             .content()
             .chunks(width as usize)
-            .map(|row| row.iter().map(|c| c.symbol().to_string()).collect::<String>())
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol().to_string())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
